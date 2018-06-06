@@ -3,11 +3,21 @@ import rospy
 import numpy as np
 import tf2_ros
 from tf.transformations import euler_from_quaternion
-from geometry_msgs.msg import Twist
+from geometry_msgs.msg import Twist, Point
 from std_msgs.msg import String
 from threading import Lock
 from std_msgs.msg import Int32MultiArray
+from visualization_msgs.msg import MarkerArray, Marker
 
+class Node(object):
+    def __init__(self,x,y):
+        self.x = x
+        self.y = y
+        self.parent = None
+        
+    def distance(self, random_point):
+        distance = np.sqrt((self.x-random_point[0])**2 + (self.y - random_point[1])**2)
+        return distance
 
 class MotionPlanner:
     def __init__(self):
@@ -38,6 +48,12 @@ class MotionPlanner:
         self.COLLISION_STOP_DISTANCE = rospy.get_param("motion_planner/COLLISION_STOP_DISTANCE")
         self.COLLISION_STOP_NEIGHBOUR_DISTANCE = rospy.get_param("motion_planner/COLLISION_STOP_NEIGHBOUR_DISTANCE")
         self.COLLISION_GAMMA = rospy.get_param("motion_planner/COLLISION_GAMMA")
+        
+        self.MAX_RRT_ITERS = rospy.get_param("motion_planner/MAX_RRT_ITERS")
+        self.STEP = rospy.get_param("motion_planner/STEP")
+        self.GAMMA_RRT = rospy.get_param("motion_planner/GAMMA_RRT")
+        self.EPSILON_GOAL = rospy.get_param("motion_planner/EPSILON_GOAL")
+        self.PATH_WIDTH = rospy.get_param("motion_planner/PATH_WIDTH")
 
         if self.robot_name == "main_robot":
             # get initial cube heap coordinates
@@ -54,6 +70,12 @@ class MotionPlanner:
 
         self.mutex = Lock()
 
+        self.o_map = None
+        self.secondary_o_map = None
+        self.nodes = None
+        self.nodes_secondary = None
+        self.resolution = None
+        
         self.cmd_id = None
         self.t_prev = None
         self.goal = None
@@ -76,15 +98,26 @@ class MotionPlanner:
         # start the main timer that will follow given goal points
         rospy.Timer(rospy.Duration(1.0 / self.RATE), self.plan)
         
-    def update_main_map(self):
+    def update_main_map(self, msg):
+        self.x0 = 
+        self.y0 = 
+        self.map_width = 
+        self.map_height = 
+        self.resolution = 
+        self.shape_map = 
+        self.permissible_region = 
         
-        
-    def update_secondary_map(self):
-    
+    def update_secondary_map(self, msg):
+        self.x0 = 
+        self.y0 = 
+        self.map_width = 
+        self.map_height = 
+        self.resolution = 
+        self.shape_map = 
+        self.permissible_region =
     
     def plan(self):
         self.mutex.acquire()
-        
         
         if self.cmd_id is None:
             self.mutex.release()
@@ -147,7 +180,9 @@ class MotionPlanner:
            
             speed_limit = min(speed_limit_dec, speed_limit_acs, *speed_limit_collision)
             rospy.loginfo('Final Speed Limit:\t' + str(speed_limit))
-            path = self.find_path()
+            
+            #Find a path and then follow it
+            path = self.find_path_rrtstar()
             vel = self.follow_path(path)
 
             ## maximum speed in goal distance proportion
@@ -173,9 +208,293 @@ class MotionPlanner:
         self.mutex.release()
         
     def find_path_astar(self):
+        pass
 
     def find_path_rrtstar(self):
+        x,y = self.start
+        start_node = Node(x,y)
+        self.nodes.append(start_node)
+        j = 0
+        path_found = False
+        while not(path_found) and (j < self.MAX_RRT_ITERS):
+
+            # random sample
+            if j%25 == 0:
+                # sample goal location every 25 iterations
+                rnd = [self.goal[0], self.goal[1]]
+            else:
+                rnd = [self.x0 - self.map_width*np.random.uniform(), self.y0 - self.map_height*np.random.uniform()]
+
+            # find the nearest node
+            nn_idx = self.nearest_node(rnd)
+            x_near = self.nodes[nn_idx]
+
+            # expand the tree
+            x_new, theta = self.steer_to_node(x_near,rnd)
+            x_new.parent = nn_idx
+
+            print "length nodes"
+            print j
+            print ""
+
+            # check for obstacle collisions
+            if self.obstacle_free(x_near, x_new, theta):
+		
+                # find close nodes
+                near_idxs = self.find_near_nodes(x_new)
+
+
+                # find the best parent for the node
+                x_new = self.choose_parent(x_new, near_idxs)
+
+                # add new node and rewire
+                self.nodes.append(x_new)
+                self.rewire(x_new, near_idxs)
+
+                # check if sample point is in goal region
+                dx = x_new.x - self.goal[0]
+                dy = x_new.y - self.goal[1]
+                d = np.sqrt(dx**2 + dy**2)
+                if d <= self.EPSILON_GOAL:
+                    # construct path
+                    last_idx = self.get_last_idx()
+                    if last_idx is None:
+                        return None
+                    path = self.get_path(last_idx)
+                    self.path = path
+
+
+                    #for point in self.path:
+                    #	pt_obj = Point()
+                    #	pt_obj.x = point[0]
+                    #	pt_obj.y = point[1]
+
+                    #	self.trajectory.addPoint(pt_obj)
+                    #self.publish_trajectory()
+
+                    #self.visualize()
+                    return self.path
+			
+            j += 1
+
+    def nearest_node(self, random_point):
+        """ Finds the index of the nearest node in self.nodes to random_point """
+        # index of nearest node
+        nn_idx = 0
+        # loops through all nodes and finds the closest one
+        for i in range(len(self.nodes)):
+            node = self.nodes[i]
+            nearest_node = self.nodes[nn_idx]
+            if node.distance(random_point) < nearest_node.distance(random_point):
+                nn_idx = i
+        return nn_idx
         
+    def steer_to_node(self, x_near, rnd):
+        """ Steers from x_near to a point on the line between rnd and x_near """
+
+        theta = math.atan2(rnd[1] - x_near.y, rnd[0] - x_near.x)
+        new_x = x_near.x + self.STEP*math.cos(theta)
+        new_y = x_near.y + self.STEP*math.sin(theta)
+
+        x_new = Node(new_x, new_y)
+        x_new.cost += self.STEP
+
+        return x_new, theta
+
+    def obstacle_free(self, nearest_node, new_node, theta):
+        """ Checks if the path from x_near to x_new is obstacle free """
+
+        dx = math.sin(theta)*self.PATH_WIDTH
+        dy = math.cos(theta)*self.PATH_WIDTH
+
+        # line = [[nearest_node.x, nearest_node.y], [new_node.x, new_node.y]]
+
+        if (nearest_node.x < new_node.x):
+            bound1 = ((nearest_node.x+dx, nearest_node.y-dy), (new_node.x+dx, new_node.y-dy))
+            bound2 = ((nearest_node.x-dx, nearest_node.y+dy), (new_node.x-dx, new_node.y+dy))
+        else:
+            bound1 = ((new_node.x+dx, new_node.y-dy), (nearest_node.x+dx, nearest_node.y-dy))
+            bound2 = ((new_node.x-dx, new_node.y+dy), (nearest_node.x-dx, nearest_node.y+dy))
+
+
+        if (self.line_collision(bound1) or self.line_collision(bound2)):
+            return False
+        else:
+            return True
+
+    def line_collision(self, line):
+        """ Checks if line collides with obstacles in the map"""
+
+        # discretize values of x and y along line according to map using Bresemham's alg
+
+
+        x_ind = np.arange(np.ceil((line[0][0])/self.resolution),np.ceil((line[1][0])/self.resolution + 1), dtype = int)
+        y_ind = []
+
+        dx = max(1,np.ceil(line[1][0]/self.resolution) - np.ceil(line[0][0]/self.resolution))
+        dy = np.ceil(line[1][1]/self.resolution) - np.ceil(line[0][1]/self.resolution)
+        deltaerr = abs(dy/dx)
+        error = .0
+
+        y = int(np.ceil((line[0][1])/self.resolution))
+        for x in x_ind:
+            y_ind.append(y)
+            error = error + deltaerr
+            while error >= 0.5:
+                y += np.sign(dy)*1
+                error += -1
+
+        y_ind = np.array(y_ind)
+        # check if each cell along line contains obstacle
+        for i in range(len(x_ind)):
+
+            row = min([int(-self.y0/self.resolution + y_ind[i]), self.shape_map[0] - 1])
+            column = min([int(-self.x0/self.resolution + x_ind[i]), self.shape_map[1]-1])
+            # print row, column, "rowcol"
+            # print self.map_width, self.map_height
+            if self.permissible_region[row,column] == 0:                
+                return True
+        return False
+
+    def find_near_nodes(self, x_new):
+        length_nodes = len(self.nodes)
+        r = self.GAMMA_RRT*math.sqrt((math.log(length_nodes)/length_nodes))
+        near_idxs = []
+        for i in range(len(self.nodes)):
+            node = self.nodes[i]
+            if node.distance((x_new.x, x_new.y)) <= r**2:
+                near_idxs.append(i)
+        return near_idxs
+
+    def choose_parent(self, x_new, near_idxs):
+        if len(near_idxs) == 0:
+            return x_new
+
+        distances = []
+        for i in near_idxs:
+            node = self.nodes[i]
+            d = node.distance((x_new.x, x_new.y)) 
+            dx = x_new.x - node.x
+            dy = x_new.y - node.y
+            theta = math.atan2(dy,dx)
+
+            if self.obstacle_free(node, x_new, theta):
+                distances.append(d)
+            else:
+                distances.append(float("inf"))
+        mincost = min(distances)
+        minind = near_idxs[distances.index(mincost)]
+
+        if mincost == float("inf"):
+            return x_new
+
+        x_new.cost = mincost
+        x_new.parent = minind
+
+        return x_new
+
+    def rewire(self, x_new, near_idxs):
+        n = len(self.nodes)
+        for i in near_idxs:
+            node = self.nodes[i]
+            d = node.distance((x_new.x, x_new.y))
+            scost = x_new.cost + d
+
+
+            if node.cost > scost:
+                dx = x_new.x - node.x
+                dy = x_new.y - node.y
+                theta = math.atan2(dy,dx)
+                if self.obstacle_free(node,x_new,theta):
+                    node.parent = n - 1
+                    node.cost = scost
+
+    def get_last_idx(self):
+        dlist = []
+        for node in self.nodes:
+            d = node.distance((self.goal[0], self.goal[1]))
+            dlist.append(d)
+        goal_idxs = [dlist.index(i) for i in dlist if i <= self.step]
+
+        if len(goal_idxs) == 0:
+            return None
+
+        mincost = min([self.nodes[i].cost for i in goal_idxs])
+
+        for i in goal_idxs:
+            if self.nodes[i].cost == mincost:
+                return i
+
+        return None
+
+    def get_path(self, last_idx):
+        path = [(self.goal[0], self.goal[1])]
+        while self.nodes[last_idx].parent is not None:
+            node = self.nodes[last_idx]
+            path.append((node.x, node.y))
+            last_idx = node.parent
+        path.append((self.start[0], self.start[1]))
+        path.reverse()
+        return path
+
+    def visualize(self):
+        if self.nodes != []:
+            line_strip = Marker()
+            line_strip.type = line_strip.LINE_STRIP
+            line_strip.action = line_strip.ADD
+            line_strip.header.frame_id = "/map"
+
+            line_strip.scale.x = 0.05
+
+            line_strip.color.a = 1.0
+            line_strip.color.r = 1.0
+            line_strip.color.g = 0.0
+            line_strip.color.b = 0.0
+
+            # marker orientaiton
+            line_strip.pose.orientation.x = 0.0
+            line_strip.pose.orientation.y = 0.0
+            line_strip.pose.orientation.z = 0.0
+            line_strip.pose.orientation.w = 1.0
+
+            # marker position
+            line_strip.pose.position.x = 0.0
+            line_strip.pose.position.y = 0.0
+            line_strip.pose.position.z = 0.0
+
+            # marker line points
+            line_strip.points = []
+
+            plt.clf()
+
+            for node in self.nodes:
+                if node.parent is not None:
+                    plt.plot([node.x, self.nodes[node.parent].x], [node.y, self.nodes[node.parent].y], "-g")
+
+            x,y = self.start
+            plt.plot(x,y, "ob")
+            x,y = self.goal
+            plt.plot(x,y, "og")
+            plt.axis([-26, self.max_x-26, -11, self.max_y-11])
+            plt.pause(0.01)
+
+            for i = np.shape(self.permissible_region)[0]:
+                for j = np.shape(self.permissible_region)[1]:
+                    if permissible_region[i,j] == 0:
+                        plt.plot(i*self.resolution, j*self.resolution, "rx")
+
+            # print("plotting")
+            # for node in self.path:
+            # 	print(node)
+            # 	new_point = Point()
+            # 	new_point.x = node[0]
+            # 	new_point.y = node[1]
+            # 	new_point.z = 0.0
+            # 	line_strip.points.append(new_point)
+
+            # # Publish the Marker
+            # self.viz_pub.publish(line_strip)
+
 
     def follow_path(self,path):
 
