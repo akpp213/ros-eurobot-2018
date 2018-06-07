@@ -26,3 +26,6 @@ STEP: .1
 GAMMA_RRT: 3
 EPSILON_GOAL: .02
 PATH_WIDTH: .1
+#params for pure pursuit
+LOOKAHEAD: 0.25
+WHEELBASE_LEN: 0.2
