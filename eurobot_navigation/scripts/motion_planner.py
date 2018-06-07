@@ -150,7 +150,7 @@ class MotionPlanner:
 
         # current linear and angular goal distance
         goal_distance = np.zeros(3)
-        goal_distance = self.goal - self.coords
+        goal_distance = self.distance(self.coords, self.goal)
         rospy.loginfo('Goal distance:\t' + str(goal_distance))
         goal_d = np.linalg.norm(goal_distance[:2])
         rospy.loginfo('Goal d:\t' + str(goal_d))
@@ -200,9 +200,10 @@ class MotionPlanner:
             
             #Find a path and then follow it
             self.find_path_rrtstar()
+            vel = []
             if self.path is not None:
                 vel = self.follow_path()
-            else:
+            if vel == []:
                 # maximum speed in goal distance proportion
                 vel = self.V_MAX * goal_distance / goal_d
             
@@ -516,6 +517,7 @@ class MotionPlanner:
 
 
     def follow_path(self):
+        vel = []
         if self.path != []:
             ind = self.find_closest_segment(self.coords[:2])
             index = ind
@@ -524,33 +526,32 @@ class MotionPlanner:
             look = self.LOOKAHEAD
             while(ret_type != 2 and ret_type != 3): #types 2 and 3 imply either 2 intersections or one in the direction of desired motion
                 seg = [self.path[index],self.path[index+1]]
-                ret_type, closest_pnt, intersect_pnt, a, b = goal_point(self.coords[:2], look, seg)
-                #if ret_type == 2 or ret_type == 3:
-                    #self.x_pnts.append(closest_pnt)
-                    #self.time_pnts.append(len(self.x_pnts)-1)
+                ret_type, closest_pnt, intersect_pnt = self.goal_point(self.coords[:2], look, seg)
                 if index < self.path.shape[0]-2:
                     index += 1
                 elif ret_type == 1:
-                    intersect_pnt = pnts[-1]
+                    intersect_pnt = self.path[-1]
                     ret_type = 2
                 else:
                     look*=1.5
                     index = ind
                     
-            #TODO transformed_pt = self.global_to_car_transform(intersect_pnt,myPose)
+            #transformed_pt = self.global_to_car_transform(intersect_pnt,myPose)
+            transformed_pt = self.rotation_transform(intersect_pnt, myPose)
             speed_var = abs(np.arctan2(transformed_pt[1],transformed_pt[0]))
             if speed_var < .1: speed_var = 0
-            curv = curvature(look,-transformed_pt[1])
+            curv = self.curvature(look,-transformed_pt[1])
             
-            angle = -np.arctan(self.wheelbase_length*curv)
+            angle = -np.arctan(self.WHEELBASE_LEN*curv)
             self.turn_angle = angle
 
-            #rospy.logwarn(str(angle)+"angle")
-            self.control_vehicle(angle,speed_var)
+            #self.control_vehicle(angle,speed_var)
+            #adds x vel to the velocity list
+            vel.append(min(self.V_MAX, self.V_MAX-speed_var*2))
         
         return vel
         
-    def find_closest_segment(pos):
+    def find_closest_segment(self, pos):
         '''
         Finds the closest line segment to the car from anywhere along the trajectory
         '''
@@ -566,18 +567,82 @@ class MotionPlanner:
         
     def find_min_dist(self, p1, p2, myPose):
         '''
-        given 2 points and the robot's position, finds the shortest distance to the line segment from the robot
+        given 2 lists of points and the robot's position, finds the shortest distance to each line segment from the robot.
+        line segments are formed from the two points at the same index in each list
         '''
         
         #finds the distance squared between the two points
         l2 = np.sum(np.abs(p1-p2)**2,axis=-1,dtype=np.float32)
-
-        # #checks if the points are the same
-        # if l2 == 0: return np.sum(np.abs(myPose-p1)**2,axis=-1)**(1./2)
-
+        #finds where along the line segment is closest to myPose. t is a fraction of the line segment, so it must be between 0 and 1
         t = np.maximum(0, np.minimum(1, np.einsum('ij,ij->i',myPose - p1, p2 - p1) / l2))
+        #uses this fraction to get the actual location of the point closest to myPose
         projection = p1 + np.repeat(t,2).reshape((p2.shape[0],2)) * (p2 - p1)
+        #returns the distance between the closest point and myPose
         return np.sum(np.abs(myPose-projection)**2,axis=-1)**(1./2)
+        
+    def goal_point(self, car_pos, lookahead, constraint):
+        # Code to find the closest point on a line segment to a center of a circle if the line segment passes through the circle
+        # Returns a Boolean stating if there was an intersection, and where the closest intersection is
+        #
+        # Inputs: car_pos = [x,y, orientation]  Point that states the center of the circle
+        #         lookahead = radius        Scalar value of the radius of the circle
+        #         constraint = 2x2 Vector   End points of path line segment
+        #
+        #
+        # Outputs: Return Type				Which case is returned
+        #
+        #		   Closest Point            Vector of the coords of point on 
+        #                                   line segment closest to circle center
+        #
+        #          Goal Point               Vector of the coords of point on 
+        #                                   line segment that is the goal point
+        #   
+        #          t                        Percentage of way along the trajectory
+        #                                   the closest point is  
+        # 
+        #          goal_t                   Percentage of way along the trajectory
+        #                                   the goal point is
+
+        Q = [car_pos[0],car_pos[1]]
+
+        r = lookahead                       # Radius of the circle
+        P1 = np.array(constraint[0])                # Start of line segment
+        V = np.subtract(np.array(constraint[1]), P1)            # Vector along line segment
+
+        a = float(np.dot(V,V))
+        b = float(2*np.dot(V,(P1 - Q)))
+        c = np.dot(P1,P1) + np.dot(Q,Q) - 2*np.dot(P1,Q) - r**2
+
+        disc = b**2-4*a*c
+        if disc < 0:
+            # Line segment is outside of the circle, need to extend circle radius
+            return 0,None, None
+
+        sqrt_disc = math.sqrt(disc)
+        t1 = (-b + sqrt_disc) / (2*a)
+        t2 = (-b - sqrt_disc) / (2*a)
+
+        # Closest point on extended line to center of circle is P1 + t*V where t is listed below
+        t = max(0, min(1, -b / (2*a)))
+
+        if not (0 <= t1 <= 1):
+            # t2 intersects, but not t1. return the closest point and goal point
+            return 1, P1 + t*V, P1 + t2*V
+
+        elif not (0 <= t2 <= 1):
+            # t1 intersects, but not t2, return the closest point and goal point
+            return 2, P1 + t*V, P1 + t1*V
+
+        elif not (0 <= t1 <= 1 or 0 <= t2 <= 1):
+            # Line segment is inside circle but too short, need to shrink circle radius
+            return -1, None, None
+
+        else:
+            goal_t = max((t1-t), (t2-t)) + t
+            return 3, P1 + t*V, P1 + goal_t*V
+            
+    def curvature(self, lookahead, x):
+        return (2*x) / (lookahead**2)
         
     def choose_active_rangefinders(self):
         if self.robot_name == "secondary_robot":
