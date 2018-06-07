@@ -49,12 +49,16 @@ class MotionPlanner:
         self.COLLISION_STOP_DISTANCE = rospy.get_param("motion_planner/COLLISION_STOP_DISTANCE")
         self.COLLISION_STOP_NEIGHBOUR_DISTANCE = rospy.get_param("motion_planner/COLLISION_STOP_NEIGHBOUR_DISTANCE")
         self.COLLISION_GAMMA = rospy.get_param("motion_planner/COLLISION_GAMMA")
-        
+        #for path planning
         self.MAX_RRT_ITERS = rospy.get_param("motion_planner/MAX_RRT_ITERS") #1000
         self.STEP = rospy.get_param("motion_planner/STEP") #0.1
         self.GAMMA_RRT = rospy.get_param("motion_planner/GAMMA_RRT") #3
         self.EPSILON_GOAL = rospy.get_param("motion_planner/EPSILON_GOAL") #0.2
         self.PATH_WIDTH = rospy.get_param("motion_planner/PATH_WIDTH") #0.1
+        #for pure pursuit path following
+        self.LOOKAHEAD = rospy.get_param("motion_planner/LOOKAHEAD") #0.25
+        #self.SPEED = rospy.get_param("motion_planner/SPEED") #
+        self.WHEELBASE_LEN = rospy.get_param("motion_planner/WHEELBASE_LEN") #0.2
 
         if self.robot_name == "main_robot":
             # get initial cube heap coordinates
@@ -76,6 +80,8 @@ class MotionPlanner:
         self.nodes = None
         self.nodes_secondary = None
         self.resolution = None
+        self.path = None
+        self.turn_angle = None
         
         self.cmd_id = None
         self.t_prev = None
@@ -193,11 +199,13 @@ class MotionPlanner:
             rospy.loginfo('Final Speed Limit:\t' + str(speed_limit))
             
             #Find a path and then follow it
-            path = self.find_path_rrtstar()
-            vel = self.follow_path(path)
-
-            ## maximum speed in goal distance proportion
-            #vel = self.V_MAX * goal_distance / goal_d
+            self.find_path_rrtstar()
+            if self.path is not None:
+                vel = self.follow_path()
+            else:
+                # maximum speed in goal distance proportion
+                vel = self.V_MAX * goal_distance / goal_d
+            
             if abs(vel[2]) > self.W_MAX:
                 vel *= self.W_MAX / abs(vel[2])
             rospy.loginfo('Vel before speed limit\t:' + str(vel))
@@ -270,9 +278,9 @@ class MotionPlanner:
                     # construct path
                     last_idx = self.get_last_idx()
                     if last_idx is None:
-                        return None
+                        return
                     path = self.get_path(last_idx)
-                    self.path = path
+                    self.path = np.array(path)
 
 
                     #for point in self.path:
@@ -284,7 +292,7 @@ class MotionPlanner:
                     #self.publish_trajectory()
 
                     #self.visualize()
-                    return self.path
+                    #return self.path
 			
             j += 1
 
@@ -317,8 +325,6 @@ class MotionPlanner:
 
         dx = math.sin(theta)*self.PATH_WIDTH
         dy = math.cos(theta)*self.PATH_WIDTH
-
-        # line = [[nearest_node.x, nearest_node.y], [new_node.x, new_node.y]]
 
         if (nearest_node.x < new_node.x):
             bound0 = ((nearest_node.x, nearest_node.y), (new_node.x, new_node.y))
@@ -361,11 +367,11 @@ class MotionPlanner:
         # check if any cell along the line contains an obstacle
         for i in range(len(x_ind)):
 
-            row = min([int(-self.y0/self.resolution + y_ind[i]), self.shape_map[0] - 1])
-            column = min([int(-self.x0/self.resolution + x_ind[i]), self.shape_map[1]-1])
+            row = min([int(-self.y0/self.resolution + y_ind[i]), self.shape_map[1] - 1])
+            column = min([int(-self.x0/self.resolution + x_ind[i]), self.shape_map[0]-1])
             # print row, column, "rowcol"
             # print self.map_width, self.map_height
-            if self.permissible_region[row,column] == 0:                
+            if not self.permissible_region[row,column]:                
                 return True
         return False
 
@@ -442,7 +448,7 @@ class MotionPlanner:
 
     def get_path(self, last_idx):
         path = [(self.goal[0], self.goal[1])]
-        while self.nodes[last_idx].parent is not None:
+        while self.nodes[last_idx].parent is not None and (self.nodes[last_idx].x,self.nodes[last_idx].y) not in path:
             node = self.nodes[last_idx]
             path.append((node.x, node.y))
             last_idx = node.parent
@@ -509,9 +515,69 @@ class MotionPlanner:
             # self.viz_pub.publish(line_strip)
 
 
-    def follow_path(self,path):
+    def follow_path(self):
+        if self.path != []:
+            ind = self.find_closest_segment(self.coords[:2])
+            index = ind
+            intersect_pnt = None
+            ret_type = None
+            look = self.LOOKAHEAD
+            while(ret_type != 2 and ret_type != 3): #types 2 and 3 imply either 2 intersections or one in the direction of desired motion
+                seg = [self.path[index],self.path[index+1]]
+                ret_type, closest_pnt, intersect_pnt, a, b = goal_point(self.coords[:2], look, seg)
+                #if ret_type == 2 or ret_type == 3:
+                    #self.x_pnts.append(closest_pnt)
+                    #self.time_pnts.append(len(self.x_pnts)-1)
+                if index < self.path.shape[0]-2:
+                    index += 1
+                elif ret_type == 1:
+                    intersect_pnt = pnts[-1]
+                    ret_type = 2
+                else:
+                    look*=1.5
+                    index = ind
+                    
+            #TODO transformed_pt = self.global_to_car_transform(intersect_pnt,myPose)
+            speed_var = abs(np.arctan2(transformed_pt[1],transformed_pt[0]))
+            if speed_var < .1: speed_var = 0
+            curv = curvature(look,-transformed_pt[1])
+            
+            angle = -np.arctan(self.wheelbase_length*curv)
+            self.turn_angle = angle
 
+            #rospy.logwarn(str(angle)+"angle")
+            self.control_vehicle(angle,speed_var)
+        
         return vel
+        
+    def find_closest_segment(pos):
+        '''
+        Finds the closest line segment to the car from anywhere along the trajectory
+        '''
+        x,y=pos
+        closest = None
+        mps = ([x,y])*np.ones((self.path.shape[0]-1,2))
+        
+        #finds the closest point to the robot in each line segment
+        min_dists = self.find_min_dist(self.path[:-1],self.path[1:],mps)
+        
+        closest_seg_index = np.argmin(min_dists)
+        return closest_seg_index
+        
+    def find_min_dist(self, p1, p2, myPose):
+        '''
+        given 2 points and the robot's position, finds the shortest distance to the line segment from the robot
+        '''
+        
+        #finds the distance squared between the two points
+        l2 = np.sum(np.abs(p1-p2)**2,axis=-1,dtype=np.float32)
+
+        # #checks if the points are the same
+        # if l2 == 0: return np.sum(np.abs(myPose-p1)**2,axis=-1)**(1./2)
+
+        t = np.maximum(0, np.minimum(1, np.einsum('ij,ij->i',myPose - p1, p2 - p1) / l2))
+        projection = p1 + np.repeat(t,2).reshape((p2.shape[0],2)) * (p2 - p1)
+        return np.sum(np.abs(myPose-projection)**2,axis=-1)**(1./2)
         
     def choose_active_rangefinders(self):
         if self.robot_name == "secondary_robot":
