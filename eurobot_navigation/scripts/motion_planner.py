@@ -883,7 +883,7 @@ class MotionPlanner:
         while not self.update_coords():
             rospy.sleep(0.05)
 
-        d_map_frame = goal[:2] - self.coords[:2]
+        d_map_frame = goal[:2] - self.coords;[:2]
         rospy.loginfo("Distance in map frame:\t" + str(d_map_frame))
         d_robot_frame = self.rotation_transform(d_map_frame, -self.coords[2])
         v = np.abs(d_robot_frame) / np.linalg.norm(d_robot_frame) * vel
