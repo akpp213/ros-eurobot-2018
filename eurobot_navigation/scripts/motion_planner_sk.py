@@ -3,22 +3,11 @@ import rospy
 import numpy as np
 import tf2_ros
 from tf.transformations import euler_from_quaternion
-from geometry_msgs.msg import Twist, Point
+from geometry_msgs.msg import Twist
 from std_msgs.msg import String
 from threading import Lock
 from std_msgs.msg import Int32MultiArray
-from visualization_msgs.msg import MarkerArray, Marker
 
-class Node(object):
-    def __init__(self,x,y):
-        self.x = x
-        self.y = y
-        self.parent = None
-        self.cost = 0.0
-        
-    def distance(self, random_point):
-        distance = np.sqrt((self.x-random_point[0])**2 + (self.y - random_point[1])**2)
-        return distance
 
 class MotionPlanner:
     def __init__(self):
@@ -49,16 +38,6 @@ class MotionPlanner:
         self.COLLISION_STOP_DISTANCE = rospy.get_param("motion_planner/COLLISION_STOP_DISTANCE")
         self.COLLISION_STOP_NEIGHBOUR_DISTANCE = rospy.get_param("motion_planner/COLLISION_STOP_NEIGHBOUR_DISTANCE")
         self.COLLISION_GAMMA = rospy.get_param("motion_planner/COLLISION_GAMMA")
-        #for path planning
-        self.MAX_RRT_ITERS = rospy.get_param("motion_planner/MAX_RRT_ITERS") #1000
-        self.STEP = rospy.get_param("motion_planner/STEP") #0.1
-        self.GAMMA_RRT = rospy.get_param("motion_planner/GAMMA_RRT") #3
-        self.EPSILON_GOAL = rospy.get_param("motion_planner/EPSILON_GOAL") #0.2
-        self.PATH_WIDTH = rospy.get_param("motion_planner/PATH_WIDTH") #0.1
-        #for pure pursuit path following
-        self.LOOKAHEAD = rospy.get_param("motion_planner/LOOKAHEAD") #0.25
-        #self.SPEED = rospy.get_param("motion_planner/SPEED") #
-        self.WHEELBASE_LEN = rospy.get_param("motion_planner/WHEELBASE_LEN") #0.2
 
         if self.robot_name == "main_robot":
             # get initial cube heap coordinates
@@ -75,14 +54,6 @@ class MotionPlanner:
 
         self.mutex = Lock()
 
-        self.o_map = None
-        self.secondary_o_map = None
-        self.nodes = None
-        self.nodes_secondary = None
-        self.resolution = None
-        self.path = None
-        self.turn_angle = None
-        
         self.cmd_id = None
         self.t_prev = None
         self.goal = None
@@ -100,36 +71,13 @@ class MotionPlanner:
         rospy.Subscriber("move_command", String, self.cmd_callback, queue_size=1)
         rospy.Subscriber("response", String, self.response_callback, queue_size=1)
         rospy.Subscriber("barrier_rangefinders_data", Int32MultiArray, self.rangefinder_data_callback, queue_size=1)
-        rospy.Subscriber("/main_robot/map", OccupancyGrid, self.update_main_map, queue_size=1)
-        rospy.Subscriber("/secondary_robot/map", OccupancyGrid, self.update_secondary_map, queue_size=1)
+
         # start the main timer that will follow given goal points
         rospy.Timer(rospy.Duration(1.0 / self.RATE), self.plan)
-        
-    def update_main_map(self, msg):
-        self.x0 = msg.info.origin.position.x
-        self.y0 = msg.info.origin.position.y
-        self.map_width = msg.info.width * msg.info.resolution
-        self.map_height = msg.info.height * msg.info.resolution
-        self.resolution = msg.info.resolution
-        self.shape_map = (msg.info.width, msg.info.height)
-        array255 = msg.data.reshape((msg.info.height, msg.info.width))
-        self.permissible_region = np.ones_like(array255, dtype=bool)
-        self.permissible_region[array255==100]=0 #setting occupied regions (100) to 0. Unoccupied regions are a 1 
-        
-    def update_secondary_map(self, msg):
-        self.s_x0 = msg.info.origin.position.x
-        self.s_y0 = msg.info.origin.position.y
-        self.s_map_width = msg.info.width * msg.info.resolution #meters
-        self.s_map_height = msg.info.height * msg.info.resolution #meters
-        self.s_resolution = msg.info.resolution
-        self.s_shape_map = (msg.info.width, msg.info.height) #pixels
-        array255 = msg.data.reshape((msg.info.height, msg.info.width))
-        self.s_permissible_region = np.ones_like(array255, dtype=bool)
-        self.s_permissible_region[array255==100]=0 #setting occupied regions (100) to 0. Unoccupied regions are a 1 
-    
-    def plan(self):
+
+    def plan(self, event):
         self.mutex.acquire()
-        
+
         if self.cmd_id is None:
             self.mutex.release()
             return
@@ -139,12 +87,6 @@ class MotionPlanner:
         if not self.update_coords():
             self.set_speed(np.zeros(3))
             rospy.loginfo('Stopping because of tf2 lookup failure.')
-            self.mutex.release()
-            return
-            
-        if not self.goal:
-            self.set_speed(np.zeros(3))
-            rospy.loginfo('Stopping because there is no goal yet')
             self.mutex.release()
             return
 
@@ -161,7 +103,7 @@ class MotionPlanner:
             self.terminate_following()
             self.mutex.release()
             return
-            
+
         active_rangefinders, stop_ranges = self.choose_active_rangefinders()
         rospy.loginfo("Active rangefinders: " + str(active_rangefinders) + "\t with ranges: " + str(stop_ranges))
         rospy.loginfo("Active rangefinders data: " + str(self.rangefinder_data[active_rangefinders]) + ". Status: " + str(self.rangefinder_status[active_rangefinders]))
@@ -170,7 +112,7 @@ class MotionPlanner:
 
         if np.any(self.rangefinder_status[active_rangefinders]):
             # collision avoidance
-            rospy.loginfo('EMERGENCY STOP: collision avoidance. Active rangefinder error.')
+            rospy.loginfo('EMMERGENCY STOP: collision avoidance. Active rangefinder error.')
             vel_robot_frame = np.zeros(3)
         else:
             t = rospy.get_time()
@@ -197,16 +139,9 @@ class MotionPlanner:
            
             speed_limit = min(speed_limit_dec, speed_limit_acs, *speed_limit_collision)
             rospy.loginfo('Final Speed Limit:\t' + str(speed_limit))
-            
-            #Find a path and then follow it
-            self.find_path_rrtstar()
-            vel = []
-            if self.path is not None:
-                vel = self.follow_path()
-            if vel == []:
-                # maximum speed in goal distance proportion
-                vel = self.V_MAX * goal_distance / goal_d
-            
+
+            # maximum speed in goal distance proportion
+            vel = self.V_MAX * goal_distance / goal_d
             if abs(vel[2]) > self.W_MAX:
                 vel *= self.W_MAX / abs(vel[2])
             rospy.loginfo('Vel before speed limit\t:' + str(vel))
@@ -226,424 +161,7 @@ class MotionPlanner:
         rospy.loginfo('Vel cmd\t:' + str(vel_robot_frame))
 
         self.mutex.release()
-        
-    def find_path_astar(self):
-        pass
 
-    def find_path_rrtstar(self):
-        x,y,th = self.coords
-        start_node = Node(x,y)
-        self.nodes.append(start_node)
-        j = 0
-        path_found = False
-        while not(path_found) and (j < self.MAX_RRT_ITERS):
-
-            # random sample
-            if j%25 == 0:
-                # sample goal location every 25 iterations
-                rnd = [self.goal[0], self.goal[1]]
-            else:
-                rnd = [self.x0 + self.map_width*np.random.uniform(), self.y0 + self.map_height*np.random.uniform()]
-
-            # find the nearest node
-            nn_idx = self.nearest_node(rnd)
-            x_near = self.nodes[nn_idx]
-
-            # expand the tree
-            x_new, theta = self.steer_to_node(x_near,rnd) #tree goes from x_near to x_new which points in the direction to rnd
-            x_new.parent = nn_idx
-
-            print "length nodes"
-            print j
-            print ""
-
-            # check for obstacle collisions
-            if self.obstacle_free(x_near, x_new, theta):
-		
-                # find close nodes
-                near_idxs = self.find_near_nodes(x_new)
-
-
-                # find the best parent for the node
-                x_new = self.choose_parent(x_new, near_idxs)
-
-                # add new node and rewire
-                self.nodes.append(x_new)
-                self.rewire(x_new, near_idxs)
-
-                # check if sample point is in goal region
-                dx = x_new.x - self.goal[0]
-                dy = x_new.y - self.goal[1]
-                d = np.sqrt(dx**2 + dy**2)
-                if d <= self.EPSILON_GOAL:
-                    # construct path
-                    last_idx = self.get_last_idx()
-                    if last_idx is None:
-                        return
-                    path = self.get_path(last_idx)
-                    self.path = np.array(path)
-
-
-                    #for point in self.path:
-                    #	pt_obj = Point()
-                    #	pt_obj.x = point[0]
-                    #	pt_obj.y = point[1]
-
-                    #	self.trajectory.addPoint(pt_obj)
-                    #self.publish_trajectory()
-
-                    #self.visualize()
-                    #return self.path
-			
-            j += 1
-
-    def nearest_node(self, random_point):
-        """ Finds the index of the nearest node in self.nodes to random_point """
-        # index of nearest node
-        nn_idx = 0
-        # loops through all nodes and finds the closest one
-        for i in range(len(self.nodes)):
-            node = self.nodes[i]
-            nearest_node = self.nodes[nn_idx]
-            if node.distance(random_point) < nearest_node.distance(random_point):
-                nn_idx = i
-        return nn_idx
-        
-    def steer_to_node(self, x_near, rnd):
-        """ Steers from x_near to a point on the line between rnd and x_near """
-
-        theta = math.atan2(rnd[1] - x_near.y, rnd[0] - x_near.x)
-        new_x = x_near.x + self.STEP*math.cos(theta)
-        new_y = x_near.y + self.STEP*math.sin(theta)
-
-        x_new = Node(new_x, new_y)
-        x_new.cost += self.STEP
-
-        return x_new, theta
-
-    def obstacle_free(self, nearest_node, new_node, theta):
-        """ Checks if the path from x_near to x_new is obstacle free """
-
-        dx = math.sin(theta)*self.PATH_WIDTH
-        dy = math.cos(theta)*self.PATH_WIDTH
-
-        if (nearest_node.x < new_node.x):
-            bound0 = ((nearest_node.x, nearest_node.y), (new_node.x, new_node.y))
-            bound1 = ((nearest_node.x+dx, nearest_node.y-dy), (new_node.x+dx, new_node.y-dy))
-            bound2 = ((nearest_node.x-dx, nearest_node.y+dy), (new_node.x-dx, new_node.y+dy))
-        else:
-            bound0 = ((new_node.x, new_node.y), (nearest_node.x, nearest_node.y))
-            bound1 = ((new_node.x+dx, new_node.y-dy), (nearest_node.x+dx, nearest_node.y-dy))
-            bound2 = ((new_node.x-dx, new_node.y+dy), (nearest_node.x-dx, nearest_node.y+dy))
-
-
-        if (self.line_collision(bound0) or self.line_collision(bound1) or self.line_collision(bound2)):
-            return False
-        else:
-            return True
-
-    def line_collision(self, line):
-        """ Checks if line collides with obstacles in the map"""
-
-        # discretize values of x and y along line according to map using Bresemham's alg
-
-
-        x_ind = np.arange(np.ceil((line[0][0])/self.resolution),np.ceil((line[1][0])/self.resolution + 1), dtype = int)
-        y_ind = []
-
-        dx = max(1,np.ceil(line[1][0]/self.resolution) - np.ceil(line[0][0]/self.resolution))
-        dy = np.ceil(line[1][1]/self.resolution) - np.ceil(line[0][1]/self.resolution)
-        deltaerr = abs(dy/dx)
-        error = .0
-
-        y = int(np.ceil((line[0][1])/self.resolution))
-        for x in x_ind:
-            y_ind.append(y)
-            error = error + deltaerr
-            while error >= 0.5:
-                y += np.sign(dy)*1
-                error += -1
-
-        y_ind = np.array(y_ind)
-        # check if any cell along the line contains an obstacle
-        for i in range(len(x_ind)):
-
-            row = min([int(-self.y0/self.resolution + y_ind[i]), self.shape_map[1] - 1])
-            column = min([int(-self.x0/self.resolution + x_ind[i]), self.shape_map[0]-1])
-            # print row, column, "rowcol"
-            # print self.map_width, self.map_height
-            if not self.permissible_region[row,column]:                
-                return True
-        return False
-
-    def find_near_nodes(self, x_new):
-        length_nodes = len(self.nodes)
-        r = self.GAMMA_RRT*math.sqrt((math.log(length_nodes)/length_nodes))
-        near_idxs = []
-        for i in range(len(self.nodes)):
-            node = self.nodes[i]
-            if node.distance((x_new.x, x_new.y)) <= r:
-                near_idxs.append(i)
-        return near_idxs
-
-    def choose_parent(self, x_new, near_idxs):
-        if len(near_idxs) == 0:
-            return x_new
-
-        distances = []
-        for i in near_idxs:
-            node = self.nodes[i]
-            d = node.distance((x_new.x, x_new.y)) 
-            dx = x_new.x - node.x
-            dy = x_new.y - node.y
-            theta = math.atan2(dy,dx)
-
-            if self.obstacle_free(node, x_new, theta):
-                distances.append(d)
-            else:
-                distances.append(float("inf"))
-        mincost = min(distances)
-        minind = near_idxs[distances.index(mincost)]
-
-        if mincost == float("inf"):
-            return x_new
-
-        x_new.cost = mincost
-        x_new.parent = minind
-
-        return x_new
-
-    def rewire(self, x_new, near_idxs):
-        n = len(self.nodes)
-        for i in near_idxs:
-            node = self.nodes[i]
-            d = node.distance((x_new.x, x_new.y))
-            scost = x_new.cost + d
-
-
-            if node.cost > scost:
-                dx = x_new.x - node.x
-                dy = x_new.y - node.y
-                theta = math.atan2(dy,dx)
-                if self.obstacle_free(node,x_new,theta):
-                    node.parent = n - 1
-                    node.cost = scost
-
-    def get_last_idx(self):
-        dlist = []
-        for node in self.nodes:
-            d = node.distance((self.goal[0], self.goal[1]))
-            dlist.append(d)
-        goal_idxs = [dlist.index(i) for i in dlist if i <= self.step]
-
-        if len(goal_idxs) == 0:
-            return None
-
-        mincost = min([self.nodes[i].cost for i in goal_idxs])
-
-        for i in goal_idxs:
-            if self.nodes[i].cost == mincost:
-                return i
-
-        return None
-
-    def get_path(self, last_idx):
-        path = [(self.goal[0], self.goal[1])]
-        while self.nodes[last_idx].parent is not None and (self.nodes[last_idx].x,self.nodes[last_idx].y) not in path:
-            node = self.nodes[last_idx]
-            path.append((node.x, node.y))
-            last_idx = node.parent
-        path.append((self.coords[0], self.coords[1]))
-        path.reverse()
-        return path
-
-    def visualize(self):
-        if self.nodes != []:
-            line_strip = Marker()
-            line_strip.type = line_strip.LINE_STRIP
-            line_strip.action = line_strip.ADD
-            line_strip.header.frame_id = "/map"
-
-            line_strip.scale.x = 0.05
-
-            line_strip.color.a = 1.0
-            line_strip.color.r = 1.0
-            line_strip.color.g = 0.0
-            line_strip.color.b = 0.0
-
-            # marker orientaiton
-            line_strip.pose.orientation.x = 0.0
-            line_strip.pose.orientation.y = 0.0
-            line_strip.pose.orientation.z = 0.0
-            line_strip.pose.orientation.w = 1.0
-
-            # marker position
-            line_strip.pose.position.x = 0.0
-            line_strip.pose.position.y = 0.0
-            line_strip.pose.position.z = 0.0
-
-            # marker line points
-            line_strip.points = []
-
-            plt.clf()
-
-            for node in self.nodes:
-                if node.parent is not None:
-                    plt.plot([node.x, self.nodes[node.parent].x], [node.y, self.nodes[node.parent].y], "-g")
-
-            x,y = self.coords[:2]
-            plt.plot(x,y, "ob")
-            x,y = self.goal[:2]
-            plt.plot(x,y, "og")
-            plt.axis([-26, self.max_x-26, -11, self.max_y-11])
-            plt.pause(0.01)
-
-            for i = np.shape(self.permissible_region)[0]:
-                for j = np.shape(self.permissible_region)[1]:
-                    if permissible_region[i,j] == 0:
-                        plt.plot(i*self.resolution, j*self.resolution, "rx")
-
-            # print("plotting")
-            # for node in self.path:
-            # 	print(node)
-            # 	new_point = Point()
-            # 	new_point.x = node[0]
-            # 	new_point.y = node[1]
-            # 	new_point.z = 0.0
-            # 	line_strip.points.append(new_point)
-
-            # # Publish the Marker
-            # self.viz_pub.publish(line_strip)
-
-
-    def follow_path(self):
-        vel = []
-        if self.path != []:
-            ind = self.find_closest_segment(self.coords[:2])
-            index = ind
-            intersect_pnt = None
-            ret_type = None
-            look = self.LOOKAHEAD
-            while(ret_type != 2 and ret_type != 3): #types 2 and 3 imply either 2 intersections or one in the direction of desired motion
-                seg = [self.path[index],self.path[index+1]]
-                ret_type, closest_pnt, intersect_pnt = self.goal_point(self.coords[:2], look, seg)
-                if index < self.path.shape[0]-2:
-                    index += 1
-                elif ret_type == 1:
-                    intersect_pnt = self.path[-1]
-                    ret_type = 2
-                else:
-                    look*=1.5
-                    index = ind
-                    
-            #transformed_pt = self.global_to_car_transform(intersect_pnt,myPose)
-            transformed_pt = self.rotation_transform(intersect_pnt, myPose)
-            speed_var = abs(np.arctan2(transformed_pt[1],transformed_pt[0]))
-            if speed_var < .1: speed_var = 0
-            curv = self.curvature(look,-transformed_pt[1])
-            
-            angle = -np.arctan(self.WHEELBASE_LEN*curv)
-            self.turn_angle = angle
-
-            #self.control_vehicle(angle,speed_var)
-            #adds x vel to the velocity list
-            vel.append(min(self.V_MAX, self.V_MAX-speed_var*2))
-        
-        return vel
-        
-    def find_closest_segment(self, pos):
-        '''
-        Finds the closest line segment to the car from anywhere along the trajectory
-        '''
-        x,y=pos
-        closest = None
-        mps = ([x,y])*np.ones((self.path.shape[0]-1,2))
-        
-        #finds the closest point to the robot in each line segment
-        min_dists = self.find_min_dist(self.path[:-1],self.path[1:],mps)
-        
-        closest_seg_index = np.argmin(min_dists)
-        return closest_seg_index
-        
-    def find_min_dist(self, p1, p2, myPose):
-        '''
-        given 2 lists of points and the robot's position, finds the shortest distance to each line segment from the robot.
-        line segments are formed from the two points at the same index in each list
-        '''
-        
-        #finds the distance squared between the two points
-        l2 = np.sum(np.abs(p1-p2)**2,axis=-1,dtype=np.float32)
-        #finds where along the line segment is closest to myPose. t is a fraction of the line segment, so it must be between 0 and 1
-        t = np.maximum(0, np.minimum(1, np.einsum('ij,ij->i',myPose - p1, p2 - p1) / l2))
-        #uses this fraction to get the actual location of the point closest to myPose
-        projection = p1 + np.repeat(t,2).reshape((p2.shape[0],2)) * (p2 - p1)
-        #returns the distance between the closest point and myPose
-        return np.sum(np.abs(myPose-projection)**2,axis=-1)**(1./2)
-        
-    def goal_point(self, car_pos, lookahead, constraint):
-        # Code to find the closest point on a line segment to a center of a circle if the line segment passes through the circle
-        # Returns a Boolean stating if there was an intersection, and where the closest intersection is
-        #
-        # Inputs: car_pos = [x,y, orientation]  Point that states the center of the circle
-        #         lookahead = radius        Scalar value of the radius of the circle
-        #         constraint = 2x2 Vector   End points of path line segment
-        #
-        #
-        # Outputs: Return Type				Which case is returned
-        #
-        #		   Closest Point            Vector of the coords of point on 
-        #                                   line segment closest to circle center
-        #
-        #          Goal Point               Vector of the coords of point on 
-        #                                   line segment that is the goal point
-        #   
-        #          t                        Percentage of way along the trajectory
-        #                                   the closest point is  
-        # 
-        #          goal_t                   Percentage of way along the trajectory
-        #                                   the goal point is
-
-        Q = [car_pos[0],car_pos[1]]
-
-        r = lookahead                       # Radius of the circle
-        P1 = np.array(constraint[0])                # Start of line segment
-        V = np.subtract(np.array(constraint[1]), P1)            # Vector along line segment
-
-        a = float(np.dot(V,V))
-        b = float(2*np.dot(V,(P1 - Q)))
-        c = np.dot(P1,P1) + np.dot(Q,Q) - 2*np.dot(P1,Q) - r**2
-
-        disc = b**2-4*a*c
-        if disc < 0:
-            # Line segment is outside of the circle, need to extend circle radius
-            return 0,None, None
-
-        sqrt_disc = math.sqrt(disc)
-        t1 = (-b + sqrt_disc) / (2*a)
-        t2 = (-b - sqrt_disc) / (2*a)
-
-        # Closest point on extended line to center of circle is P1 + t*V where t is listed below
-        t = max(0, min(1, -b / (2*a)))
-
-        if not (0 <= t1 <= 1):
-            # t2 intersects, but not t1. return the closest point and goal point
-            return 1, P1 + t*V, P1 + t2*V
-
-        elif not (0 <= t2 <= 1):
-            # t1 intersects, but not t2, return the closest point and goal point
-            return 2, P1 + t*V, P1 + t1*V
-
-        elif not (0 <= t1 <= 1 or 0 <= t2 <= 1):
-            # Line segment is inside circle but too short, need to shrink circle radius
-            return -1, None, None
-
-        else:
-            goal_t = max((t1-t), (t2-t)) + t
-            return 3, P1 + t*V, P1 + goal_t*V
-            
-    def curvature(self, lookahead, x):
-        return (2*x) / (lookahead**2)
-        
     def choose_active_rangefinders(self):
         if self.robot_name == "secondary_robot":
             d_map_frame = self.goal[:2] - self.coords[:2]
@@ -883,7 +401,7 @@ class MotionPlanner:
         while not self.update_coords():
             rospy.sleep(0.05)
 
-        d_map_frame = goal[:2] - self.coords;[:2]
+        d_map_frame = goal[:2] - self.coords[:2]
         rospy.loginfo("Distance in map frame:\t" + str(d_map_frame))
         d_robot_frame = self.rotation_transform(d_map_frame, -self.coords[2])
         v = np.abs(d_robot_frame) / np.linalg.norm(d_robot_frame) * vel
@@ -931,4 +449,4 @@ class MotionPlanner:
 
 if __name__ == "__main__":
     planner = MotionPlanner()
-rospy.spin()
+    rospy.spin()

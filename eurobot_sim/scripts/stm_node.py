@@ -196,6 +196,12 @@ class stm_node():
                               rospy.Time.now(),
                               '%s_laser' % self.robot_name,
                               self.robot_name)
+        self.br.sendTransform((0, 0, 0),
+                              tf.transformations.quaternion_from_euler(0, 0, 0),
+                              rospy.Time.now(),
+                              'map',
+                              "%s_odom" % self.robot_name)
+
 
 
 if __name__ == '__main__':
