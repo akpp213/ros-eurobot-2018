@@ -1,0 +1,32 @@
+# max rate of the planner
+RATE: 25
+# goal tolerance
+XY_GOAL_TOLERANCE: 0.04
+YAW_GOAL_TOLERANCE: 0.15
+# maximum speed
+V_MAX: 0.15 #0.35
+W_MAX: 2.0
+# acceleration at beginning of movements
+ACCELERATION: 1.0
+# goal distance for deceleration
+D_DECELERATION: 0.15 #0.25
+# power of deceleration factor
+GAMMA: 0.75
+# params for accurate movements to water towers or cube heaps
+XY_ACCURATE_GOAL_TOLERANCE: 0.005
+YAW_ACCURATE_GOAL_TOLERANCE: 0.05
+D_ACCURATE_DECELERATION: 0.25
+NUM_RANGEFINDERS: 8
+COLLISION_STOP_DISTANCE: 150
+COLLISION_STOP_NEIGHBOUR_DISTANCE: 90
+COLLISION_GAMMA: 2
+# params for RRT*
+MAX_RRT_ITERS: 2000
+STEP: .1
+GAMMA_RRT: 1
+EPSILON_GOAL: .05
+PATH_WIDTH: .1
+GOAL_SAMPLE_RATE: 10
+#params for pure pursuit
+LOOKAHEAD: 0.06
+WHEELBASE_LEN: 0.2
