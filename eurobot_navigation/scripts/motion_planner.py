@@ -7,7 +7,7 @@ from tf.transformations import euler_from_quaternion
 from geometry_msgs.msg import Twist, Point, Polygon
 from std_msgs.msg import String
 from threading import Lock
-from std_msgs.msg import Int32MultiArray
+from std_msgs.msg import Int32MultiArray, int8
 
 
 class MotionPlanner:
@@ -28,6 +28,7 @@ class MotionPlanner:
         self.YAW_GOAL_TOLERANCE = rospy.get_param("motion_planner/YAW_GOAL_TOLERANCE")
         self.V_MAX = rospy.get_param("motion_planner/V_MAX")
         self.W_MAX = rospy.get_param("motion_planner/W_MAX")
+        self.C_A_MAX = rospy.get_param("motion_planner/COLLISION_AVOID_MAX")
         self.ACCELERATION = rospy.get_param("motion_planner/ACCELERATION")
         self.D_DECELERATION = rospy.get_param("motion_planner/D_DECELERATION")
         self.GAMMA = rospy.get_param("motion_planner/GAMMA")
@@ -83,6 +84,7 @@ class MotionPlanner:
         self.rangefinder_data = np.zeros(self.NUM_RANGEFINDERS)
         self.rangefinder_status = np.zeros(self.NUM_RANGEFINDERS)
         self.active_rangefinder_zones = np.ones(3, dtype="int")
+        self.avoid_direc = -1
 
         self.cmd_stop_robot_id = None
         self.robot_stopped = None
@@ -98,6 +100,7 @@ class MotionPlanner:
         rospy.Subscriber("response", String, self.response_callback, queue_size=1)
         rospy.Subscriber("barrier_rangefinders_data", Int32MultiArray, self.rangefinder_data_callback, queue_size=1)
         rospy.Subscriber("rrt_path", Polygon, self.rrt_found, queue_size=1)
+        rospy.Subscriber("collision_avoider_activated", int8, self.collide_avoid, queue_size=1)
         # start the main timer that will follow given goal points
         rospy.Timer(rospy.Duration(1.0 / self.RATE), self.plan)
         print "Finished Setup"
@@ -148,6 +151,17 @@ class MotionPlanner:
             # collision avoidance
             rospy.loginfo('EMERGENCY STOP: collision avoidance. Active rangefinder error.')
             vel = np.zeros(3)
+        elif self.avoid_direc != -1:
+            rospy.loginfo('AVOIDING COLLISION: picking new direction to move.')
+            if self.avoid_direc == 1:
+                vel = np.ones(3) * self.C_A_MAX
+                vel[2] = 0
+            elif self.avoid_direc == 2:
+                vel = np.ones(3) * self.C_A_MAX
+                vel[1] = -vel[1]
+                vel[2] = 0
+            else:
+                vel = np.array([-self.C_A_MAX, 0, 0])
         else:
             t = rospy.get_time()
             dt = t - self.t_prev
@@ -689,6 +703,10 @@ class MotionPlanner:
     def rangefinder_data_callback(self, data):
         self.rangefinder_data = np.array(data.data[:self.NUM_RANGEFINDERS])
         self.rangefinder_status = np.array(data.data[-self.NUM_RANGEFINDERS:])
+
+    def collide_avoid(self, msg):
+        self.avoid_direc = msg.data
+
 
 
 if __name__ == "__main__":
