@@ -7,7 +7,7 @@ import numpy as np
 # from geometry_msgs.msg import Twist, Point, Polygon
 # from std_msgs.msg import String
 # from threading import Lock
-from std_msgs.msg import int8
+from std_msgs.msg import Int8
 from sensor_msgs.msg import LaserScan
 
 
@@ -26,7 +26,7 @@ class CollisionAvoidance:
         self.indexes = None
         self.scan_mid_ind = None
         rospy.Subscriber("scan", LaserScan, self.scan_callback, queue_size=1)
-        self.collision_pub = rospy.Publisher("collision_avoider_activated", int8, queue_size=1)
+        self.collision_pub = rospy.Publisher("collision_avoider_activated", Int8, queue_size=1)
 
     def scan_callback(self, scan):
         self.scan = np.array([np.array(scan.ranges) * 1000, scan.intensities]).T
@@ -37,8 +37,8 @@ class CollisionAvoidance:
         self.indexes = np.arange(self.ranges.shape[0])
         self.scan_mid_ind = self.indexes.shape[0] // 2
         # self.ranges = scan.ranges
-        self.ranges[self.ranges < scan.range_min] = 0
-        self.ranges[self.ranges > scan.range_max] = 0
+        self.ranges[self.ranges < scan.range_min * 1000] = 0
+        self.ranges[self.ranges > scan.range_max * 1000] = 0
         collision_pnts = self.ranges[0 < self.ranges][self.ranges[0 < self.ranges] < self.LIDAR_C_A]
         if collision_pnts.shape[0] > 0:
             collision_angs = self.angles[0 < self.ranges][self.ranges[0 < self.ranges] < self.LIDAR_C_A]

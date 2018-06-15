@@ -1,13 +1,20 @@
 #!/usr/bin/env python
 import rospy
 import numpy as np
-import math
 import tf2_ros
 from tf.transformations import euler_from_quaternion
 from geometry_msgs.msg import Twist, Point, Polygon
 from std_msgs.msg import String
 from threading import Lock
-from std_msgs.msg import Int32MultiArray, int8
+from std_msgs.msg import Int32MultiArray
+from sensor_msgs.msg import LaserScan
+
+
+def rotate_vel(start_vel, angle):
+    new_vel = np.array([start_vel[0] * np.cos(angle) - start_vel[1] * np.sin(angle),
+                        start_vel[0] * np.sin(angle) + start_vel[1] * np.cos(angle)])
+    print new_vel, "new_vel"
+    return new_vel.copy()
 
 
 class MotionPlanner:
@@ -22,6 +29,7 @@ class MotionPlanner:
         self.coords = np.array(rospy.get_param('start_' + self.team_color))
         self.coords[:2] /= 1000.0
         self.vel = np.zeros(3)
+        self.last_valid_vel = np.zeros(3)
 
         self.RATE = rospy.get_param("motion_planner/RATE")
         self.XY_GOAL_TOLERANCE = rospy.get_param("motion_planner/XY_GOAL_TOLERANCE")
@@ -42,8 +50,16 @@ class MotionPlanner:
         self.COLLISION_GAMMA = rospy.get_param("motion_planner/COLLISION_GAMMA")
         # for pure pursuit path following
         self.LOOKAHEAD = rospy.get_param("motion_planner/LOOKAHEAD")  # 0.25
-        # self.SPEED = rospy.get_param("motion_planner/SPEED")  #
-        self.WHEELBASE_LEN = rospy.get_param("motion_planner/WHEELBASE_LEN")  # 0.2
+
+        self.LIDAR_C_A = rospy.get_param("motion_planner/LIDAR_COLLISION_STOP_DISTANCE")
+        self.color = rospy.get_param("/field/color")
+        self.robot_name = rospy.get_param("robot_name")
+        self.lidar_point = np.array([rospy.get_param("lidar_x"), rospy.get_param("lidar_y"), rospy.get_param("lidar_a")])
+        self.scan = None
+        self.ranges = None
+        self.angles = None
+        self.indexes = None
+        self.scan_mid_ind = None
 
         if self.robot_name == "main_robot":
             # get initial cube heap coordinates
@@ -84,7 +100,9 @@ class MotionPlanner:
         self.rangefinder_data = np.zeros(self.NUM_RANGEFINDERS)
         self.rangefinder_status = np.zeros(self.NUM_RANGEFINDERS)
         self.active_rangefinder_zones = np.ones(3, dtype="int")
-        self.avoid_direc = -1
+        self.avoid_direc = None
+        self.avoid = False
+        self.avoid_vel = np.zeros(3)
 
         self.cmd_stop_robot_id = None
         self.robot_stopped = None
@@ -100,7 +118,7 @@ class MotionPlanner:
         rospy.Subscriber("response", String, self.response_callback, queue_size=1)
         rospy.Subscriber("barrier_rangefinders_data", Int32MultiArray, self.rangefinder_data_callback, queue_size=1)
         rospy.Subscriber("rrt_path", Polygon, self.rrt_found, queue_size=1)
-        rospy.Subscriber("collision_avoider_activated", int8, self.collide_avoid, queue_size=1)
+        rospy.Subscriber("scan", LaserScan, self.scan_callback, queue_size=1)
         # start the main timer that will follow given goal points
         rospy.Timer(rospy.Duration(1.0 / self.RATE), self.plan)
         print "Finished Setup"
@@ -113,7 +131,6 @@ class MotionPlanner:
             return
 
         # rospy.loginfo("-------NEW MOTION PLANNING ITERATION-------")
-        print "Starting motion planning"
 
         if not self.update_coords():
             self.set_speed(np.zeros(3))
@@ -151,17 +168,23 @@ class MotionPlanner:
             # collision avoidance
             rospy.loginfo('EMERGENCY STOP: collision avoidance. Active rangefinder error.')
             vel = np.zeros(3)
-        elif self.avoid_direc != -1:
-            rospy.loginfo('AVOIDING COLLISION: picking new direction to move.')
-            if self.avoid_direc == 1:
-                vel = np.ones(3) * self.C_A_MAX
-                vel[2] = 0
-            elif self.avoid_direc == 2:
-                vel = np.ones(3) * self.C_A_MAX
-                vel[1] = -vel[1]
-                vel[2] = 0
-            else:
-                vel = np.array([-self.C_A_MAX, 0, 0])
+        elif self.avoid_direc:
+            # rospy.loginfo('AVOIDING COLLISION: picking new direction to move.', string(self.avoid_direc))
+            print "AVOIDING COLLISION: picking new direction to move.", self.avoid_direc
+            # if self.avoid_direc == "left":
+            #     vel = np.ones(3) * -self.C_A_MAX
+            #     vel[1] = -vel[1]
+            #     vel[2] = 0
+            #     print vel, "if"
+            # elif self.avoid_direc == "right":
+            #     vel = np.ones(3) * self.C_A_MAX
+            #     #vel[1] = -vel[1]
+            #     vel[2] = 0
+            #     print vel, "elif"
+            # else:
+            #     vel = np.array([-self.C_A_MAX, 0, 0])
+
+            vel = self.avoid_vel
         else:
             t = rospy.get_time()
             dt = t - self.t_prev
@@ -190,11 +213,12 @@ class MotionPlanner:
 
             # Find a path and then follow it
             # self.find_path_rrtstar()
-            if self.path == []:
-                self.set_speed(np.zeros(3))
-                rospy.loginfo('Stopping because the path has not been found yet')
-                self.mutex.release()
-                return
+            #if self.path == []:
+            #    self.set_speed(np.zeros(3))
+            #    rospy.loginfo('Stopping because the path has not been found yet')
+            #    self.mutex.release()
+            #    return
+            self.path = None #uncomment later
             vel = None
             wrong_coords = False
             if self.path is not None:
@@ -214,27 +238,65 @@ class MotionPlanner:
 
             if abs(vel[2]) > self.W_MAX:
                 vel *= self.W_MAX / abs(vel[2])
-            rospy.loginfo('Vel before speed limit\t:' + str(vel))
+            # rospy.loginfo('Vel before speed limit\t:' + str(vel))
 
             # apply speed limit
             v_abs = np.linalg.norm(vel[:2])
-            rospy.loginfo('Vel abs before speed limit\t:' + str(vel))
+            # rospy.loginfo('Vel abs before speed limit\t:' + str(vel))
             if v_abs > speed_limit:
                 vel *= speed_limit / v_abs
-            rospy.loginfo('Vel after speed limit\t:' + str(vel))
+            # rospy.loginfo('Vel after speed limit\t:' + str(vel))
 
             # vel to robot frame
             if wrong_coords:
                 vel = self.rotation_transform(vel, -self.coords[2])
 
+            self.last_valid_vel = vel
+
         # send cmd: vel in robot frame
         self.set_speed(vel)
-        rospy.loginfo('Vel cmd\t:' + str(vel))
+        # rospy.loginfo('Vel cmd\t:' + str(vel))
 
         self.mutex.release()
 
-    def find_path_astar(self):
-        pass
+    def scan_callback(self, scan):
+        self.ranges = np.array(scan.ranges) * 1000
+        self.angles = np.arange(scan.angle_max - scan.angle_increment, scan.angle_min - scan.angle_increment, -scan.angle_increment)
+        self.angles = np.arange(scan.angle_min, scan.angle_max, scan.angle_increment)
+        motion_angle = np.arctan2(self.last_valid_vel[1], self.last_valid_vel[0])
+        m_a_lidar_frame = motion_angle - self.lidar_point[2]
+        rel_angles = (self.angles - m_a_lidar_frame + np.pi) % (2*np.pi) - np.pi
+
+        # self.indexes = np.arange(self.ranges.shape[0])
+        # self.scan_mid_ind = self.indexes.shape[0] // 2
+        # self.ranges = scan.ranges
+        # print scan.range_min, scan.range_max
+        # print self.ranges
+        self.ranges[self.ranges < scan.range_min*1000] = 0
+        self.ranges[self.ranges > scan.range_max*1000] = 0
+        # print self.ranges
+        collision_pnts = self.ranges[0 < self.ranges][self.ranges[0 < self.ranges] < self.LIDAR_C_A]
+        if collision_pnts.shape[0] > 0:
+            print "something in range"
+            collision_angs = rel_angles[0 < self.ranges][self.ranges[0 < self.ranges] < self.LIDAR_C_A]
+            # collision_inds = self.indexes[0 < self.ranges][self.ranges[0 < self.ranges] < self.LIDAR_C_A]
+            side = collision_angs >= 0
+            self.avoid_direc = "back"
+            if side.all():
+                print "need to move right"
+                self.avoid_direc = "right"
+                self.avoid_vel[:2] = rotate_vel(self.last_valid_vel[:2], -np.pi/2)
+                self.avoid_vel[2] = self.last_valid_vel[2]
+            elif not side.any():
+                print "need to move left"
+                self.avoid_direc = "left"
+                self.avoid_vel[:2] = rotate_vel(self.last_valid_vel[:2], np.pi / 2)
+                self.avoid_vel[2] = self.last_valid_vel[2]
+            else:
+                self.avoid_vel[:2] = -self.last_valid_vel[:2]
+                print "need to back up"
+        else:
+            self.avoid_direc = None
 
     def rrt_found(self, msg):
         self.path_found = True
@@ -269,25 +331,15 @@ class MotionPlanner:
                 #     self.set_speed(np.zeros(3))
                 #     rospy.loginfo('Stopping because path was lost.')
 
-            # transformed_pt = self.global_to_car_transform(intersect_pnt,myPose)
+            # transformed_pt = self.global_to_bot_transform(intersect_pnt,myPose)
             transformed_pt = self.rotation_transform(intersect_pnt, -self.coords[2])
-            trans_pt = self.global_to_car_transform(intersect_pnt, self.coords)
+            trans_pt = self.global_to_bot_transform(intersect_pnt, self.coords)
             print trans_pt, "lookahead goal loc"
             trans = Point()
             trans.x = transformed_pt[0]
             trans.y = transformed_pt[1]
             self.lookahead_pnts_pub.publish(trans)
-            speed_var = abs(np.arctan2(trans_pt[1], trans_pt[0]))
-            if speed_var < .1:
-                speed_var = 0
-            curv = self.curvature(look, -trans_pt[1])
-            rad = 1/curv
 
-            angle = -np.arctan(self.WHEELBASE_LEN*curv)
-            self.turn_angle = angle
-
-            # self.control_vehicle(angle,speed_var)
-            # adds x vel to the velocity list
             if abs(trans_pt[1]) < abs(trans_pt[0]):
                 if trans_pt[0] > 0:
                     v_x = self.V_MAX
@@ -309,7 +361,7 @@ class MotionPlanner:
         return None
 
     def find_closest_segment(self, pos):
-        # Finds the closest line segment to the car from anywhere along the trajectory
+        # Finds the closest line segment to the bot from anywhere along the trajectory
 
         x, y = pos
         mps = ([x, y])*np.ones((self.path.shape[0]-1, 2))
@@ -337,11 +389,11 @@ class MotionPlanner:
         return np.sum(np.abs(myPose-projection)**2, axis=-1)**(1./2)
 
     @staticmethod
-    def goal_point(car_pos, lookahead, constraint):
+    def goal_point(bot_pos, lookahead, constraint):
         # Finds the closest point on line segment to center of a circle if line segment passes through the circle
         # Returns a Boolean stating if there was an intersection, and where the closest intersection is
         #
-        # Inputs: car_pos = [x,y, orientation]  Point that states the center of the circle
+        # Inputs: bot_pos = [x,y, orientation]  Point that states the center of the circle
         #         lookahead = radius        Scalar value of the radius of the circle
         #         constraint = 2x2 Vector   End points of path line segment
         #
@@ -360,7 +412,7 @@ class MotionPlanner:
         #          goal_t                   Percentage of way along the trajectory
         #                                   the goal point is
 
-        Q = [car_pos[0], car_pos[1]]
+        Q = [bot_pos[0], bot_pos[1]]
 
         r = lookahead                       # Radius of the circle
         P1 = np.array(constraint[0])                # Start of line segment
@@ -376,7 +428,7 @@ class MotionPlanner:
             # Line segment is outside of the circle, need to extend circle radius
             return 0, None, None
 
-        sqrt_disc = math.sqrt(disc)
+        sqrt_disc = np.sqrt(disc)
         t1 = (-b + sqrt_disc) / (2*a)
         t2 = (-b - sqrt_disc) / (2*a)
 
@@ -469,10 +521,10 @@ class MotionPlanner:
         ans[:2] = np.matmul(M, ans[:2].reshape((2, 1))).reshape(2)
         return ans
 
-    def global_to_car_transform(self, pnt, car_pose):
-        # quat = car_pose.orientation
-        new_pnt = pnt - np.array([car_pose[0], car_pose[1]])
-        c, s = np.cos(-car_pose[2]), np.sin(-car_pose[2])
+    def global_to_bot_transform(self, pnt, bot_pose):
+        # quat = bot_pose.orientation
+        new_pnt = pnt - np.array([bot_pose[0], bot_pose[1]])
+        c, s = np.cos(-bot_pose[2]), np.sin(-bot_pose[2])
         # return np.matrix([[c, -s], [s, c]]) * pnt.transpose()
         return np.array([c * new_pnt[0] - s * new_pnt[1], s * new_pnt[0] + c * new_pnt[1]])
 
@@ -703,10 +755,6 @@ class MotionPlanner:
     def rangefinder_data_callback(self, data):
         self.rangefinder_data = np.array(data.data[:self.NUM_RANGEFINDERS])
         self.rangefinder_status = np.array(data.data[-self.NUM_RANGEFINDERS:])
-
-    def collide_avoid(self, msg):
-        self.avoid_direc = msg.data
-
 
 
 if __name__ == "__main__":

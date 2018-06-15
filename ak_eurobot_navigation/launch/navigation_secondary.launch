@@ -1,11 +1,14 @@
 <?xml version="1.0"?>
 <launch>
 
-  <node name="rrtstar" pkg="ak_eurobot_navigation" type="rrtstar.py" ns="secondary_robot" respawn="true" output="screen">
+    <!--<node name="rrtstar" pkg="ak_eurobot_navigation" type="rrtstar.py" ns="secondary_robot" respawn="true" output="screen">
     <rosparam file="$(find ak_eurobot_navigation)/config/motion_planner_secondary_robot_params.yaml" command="load" />
-  </node>
+  </node>-->
   <node name="motion_planner" pkg="ak_eurobot_navigation" type="motion_planner.py" ns="secondary_robot" respawn="true" output="screen">
     <rosparam file="$(find ak_eurobot_navigation)/config/motion_planner_secondary_robot_params.yaml" command="load" />
   </node>
+  <!--<node name="collision_avoidance" pkg="ak_eurobot_navigation" type="collision_avoidance.py" ns="secondary_robot" respawn="true" output="screen">
+    <rosparam file="$(find ak_eurobot_navigation)/config/motion_planner_secondary_robot_params.yaml" command="load" />
+  </node>-->
 
 </launch>

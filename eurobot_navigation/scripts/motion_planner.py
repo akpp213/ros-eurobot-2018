@@ -7,7 +7,7 @@ from tf.transformations import euler_from_quaternion
 from geometry_msgs.msg import Twist, Point, Polygon
 from std_msgs.msg import String
 from threading import Lock
-from std_msgs.msg import Int32MultiArray, int8
+from std_msgs.msg import Int32MultiArray
 
 
 class MotionPlanner:
@@ -100,7 +100,7 @@ class MotionPlanner:
         rospy.Subscriber("response", String, self.response_callback, queue_size=1)
         rospy.Subscriber("barrier_rangefinders_data", Int32MultiArray, self.rangefinder_data_callback, queue_size=1)
         rospy.Subscriber("rrt_path", Polygon, self.rrt_found, queue_size=1)
-        rospy.Subscriber("collision_avoider_activated", int8, self.collide_avoid, queue_size=1)
+        rospy.Subscriber("collision_avoider_activated", String, self.collide_avoid, queue_size=1)
         # start the main timer that will follow given goal points
         rospy.Timer(rospy.Duration(1.0 / self.RATE), self.plan)
         print "Finished Setup"
