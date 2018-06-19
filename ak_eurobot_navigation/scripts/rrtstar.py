@@ -1,9 +1,9 @@
 #!/usr/bin/env python
 import rospy
-import math
 from nav_msgs.msg import OccupancyGrid
 from geometry_msgs.msg import Point, Polygon
 from visualization_msgs.msg import Marker
+from std_msgs.msg import Bool
 import numpy as np
 # import matplotlib.pyplot as plt
 
@@ -47,6 +47,8 @@ class RRTStar:
         self.map_updated = False
 
         self.new_path = rospy.Publisher('rrt_path', Polygon, queue_size=1)
+        self.viz_pub = rospy.Publisher("visualization_msgs/Marker", Marker, queue_size=3)
+        self.no_path = rospy.Publisher("no_path_found", Bool, queue_size=1)
         rospy.Subscriber('current_coords', Point, self.update_coords, queue_size=1)
         rospy.Subscriber('new_goal_loc', Point, self.find_path_rrtstar, queue_size=1)
         rospy.Subscriber("/main_robot/map", OccupancyGrid, self.update_map, queue_size=1)
@@ -63,25 +65,22 @@ class RRTStar:
 
     def update_map(self, msg):
         # print "Updating Map"
-        self.x0 = msg.info.origin.position.x
-        self.y0 = msg.info.origin.position.y
-        self.map_width = msg.info.width * msg.info.resolution
-        self.map_height = msg.info.height * msg.info.resolution
-        self.resolution = msg.info.resolution
-        self.shape_map = (msg.info.width, msg.info.height)
-        array255 = np.array(msg.data).reshape((msg.info.height, msg.info.width))
-        self.permissible_region = np.ones_like(array255, dtype=bool)
-        self.permissible_region[array255 == 100] = 0  # setting occupied regions (100) to 0. Unoccupied regions are a 1
-        # self.permissible_region[34:74, 0:34] = 1
-        # self.permissible_region[82:122, 82:122] = 1
-        # self.permissible_region[53:93, 34:74] = 1
-        self.map_updated = True
-        # print self.permissible_region
-        # self.permissible_region
-
-    # def add_look(self, msg):
-    #     print "adding new follow pnt"
-    #     plt.plot(msg.x, msg.y, 'og')
+        if not self.map_updated:
+            self.x0 = msg.info.origin.position.x  # -.2
+            self.y0 = msg.info.origin.position.y  # -.2
+            self.map_width = msg.info.width * msg.info.resolution
+            self.map_height = msg.info.height * msg.info.resolution
+            self.resolution = msg.info.resolution
+            self.shape_map = (msg.info.width, msg.info.height)
+            array255 = np.array(msg.data).reshape((msg.info.height, msg.info.width))
+            self.permissible_region = np.ones_like(array255, dtype=bool)
+            self.permissible_region[array255 == 100] = 0  # setting occupied regions (100) to 0. Unoccupied regions are a 1
+            # self.permissible_region[34:74, 0:34] = 1
+            # self.permissible_region[82:122, 82:122] = 1
+            # self.permissible_region[53:93, 34:74] = 1
+            self.map_updated = True
+            # print self.permissible_region
+            # self.permissible_region
 
     def find_path_rrtstar(self, msg):
         while not self.map_updated:
@@ -90,16 +89,19 @@ class RRTStar:
         self.goal[1] = msg.y
         self.goal[2] = msg.z
 
-        # plt.plot(self.coords[0], self.coords[1], 'ob')
-        # plt.plot(self.goal[0], self.goal[1], 'or')
+        # plt.plot((self.coords[0]-self.x0) / self.resolution, (self.coords[1]-self.y0) / self.resolution, 'ob')
+        # plt.plot((self.goal[0]-self.x0) / self.resolution, (self.goal[1]-self.y0) / self.resolution, 'or')
         # plt.pause(.001)
+        # plt.imshow(self.permissible_region)
+        # plt.pause(0.01)
+
         x, y, th = self.coords
         start_node = Node(x, y)
         self.path = []
         self.nodes = [start_node]
         j = 0
         path_found = False
-        # plt.axis([self.x0, self.x0 + self.map_width, self.y0 + self.map_height, self.y0])
+        #plt.axis([self.x0, self.x0 + self.map_width, self.y0 + self.map_height, self.y0])
         while not path_found and (j < self.MAX_RRT_ITERS):
 
             # random sample
@@ -119,7 +121,7 @@ class RRTStar:
             x_new.parent = nn_idx
 
             # print "length nodes"
-            print j
+            # print j
             # print ""
             if not j % 50:
                 print j
@@ -129,16 +131,18 @@ class RRTStar:
                 # plt.plot([x_near.x, x_new.x], [x_new.y, x_new.y])
 
                 # find close nodes
-                near_idxs = self.find_near_nodes(x_new)
+                # near_idxs = self.find_near_nodes(x_new)
 
                 # find the best parent for the node
-                x_new = self.choose_parent(x_new, near_idxs)
-                # plt.plot([x_new.x, self.nodes[x_new.parent].x], [x_new.y, self.nodes[x_new.parent].y])
+                # x_new = self.choose_parent(x_new, near_idxs)
+
+                # plt.plot([(x_new.x-self.x0) / self.resolution, (self.nodes[x_new.parent].x-self.x0) / self.resolution],
+                #          [(x_new.y-self.y0) / self.resolution, (self.nodes[x_new.parent].y-self.y0) / self.resolution])
                 # plt.pause(.0001)
 
                 # add new node and rewire
                 self.nodes.append(x_new)
-                self.rewire(x_new, near_idxs)
+                # self.rewire(x_new, near_idxs)
 
                 # check if sample point is in goal region
                 dx = x_new.x - self.goal[0]
@@ -170,6 +174,7 @@ class RRTStar:
             j += 1
 
         self.visualize()
+        self.no_path.publish(True)
 
     def nearest_node(self, random_point):
         """ Finds the index of the nearest node in self.nodes to random_point """
@@ -186,9 +191,9 @@ class RRTStar:
     def steer_to_node(self, x_near, rnd):
         """ Steers from x_near to a point on the line between rnd and x_near """
 
-        theta = math.atan2(rnd[1] - x_near.y, rnd[0] - x_near.x)
-        new_x = x_near.x + self.STEP * math.cos(theta)
-        new_y = x_near.y + self.STEP * math.sin(theta)
+        theta = np.arctan2(rnd[1] - x_near.y, rnd[0] - x_near.x)
+        new_x = x_near.x + self.STEP * np.cos(theta)
+        new_y = x_near.y + self.STEP * np.sin(theta)
 
         x_new = Node(new_x, new_y)
         x_new.cost += self.STEP
@@ -198,8 +203,8 @@ class RRTStar:
     def obstacle_free(self, nearest_node, new_node, theta):
         """ Checks if the path from x_near to x_new is obstacle free """
 
-        dx = math.sin(theta) * self.PATH_WIDTH
-        dy = math.cos(theta) * self.PATH_WIDTH
+        dx = np.sin(theta) * self.PATH_WIDTH
+        dy = np.cos(theta) * self.PATH_WIDTH
 
         if nearest_node.x < new_node.x:
             bound0 = ((nearest_node.x, nearest_node.y), (new_node.x, new_node.y))
@@ -246,11 +251,12 @@ class RRTStar:
 
         y_ind = np.array(y_ind)
         # check if any cell along the line contains an obstacle
-        # plt.plot(x_ind, y_ind)
-        # plt.pause(0.001)
+        # plt.plot(x_ind-self.x0/self.resolution, y_ind-self.y0/self.resolution)
+        # plt.pause(.001)
         for i in range(len(x_ind)):
             row = min([int(-self.y0 / self.resolution + y_ind[i]), self.shape_map[1] - 1])
             column = min([int(-self.x0 / self.resolution + x_ind[i]), self.shape_map[0] - 1])
+            # plt.plot(column, row, 'or')
             # print row, column, "rowcol"
             # print self.map_width, self.map_height
             if not self.permissible_region[row, column]:
@@ -260,7 +266,7 @@ class RRTStar:
 
     def find_near_nodes(self, x_new):
         length_nodes = len(self.nodes)
-        r = self.GAMMA_RRT * math.sqrt((math.log(length_nodes) / length_nodes))
+        r = self.GAMMA_RRT * np.sqrt((np.log(length_nodes) / length_nodes))
         near_idxs = []
         for i in range(len(self.nodes)):
             node = self.nodes[i]
@@ -278,7 +284,7 @@ class RRTStar:
             d = node.distance((x_new.x, x_new.y))
             dx = x_new.x - node.x
             dy = x_new.y - node.y
-            theta = math.atan2(dy, dx)
+            theta = np.arctan2(dy, dx)
 
             if self.obstacle_free(node, x_new, theta):
                 distances.append(d)
@@ -305,7 +311,7 @@ class RRTStar:
             if node.cost > scost:
                 dx = x_new.x - node.x
                 dy = x_new.y - node.y
-                theta = math.atan2(dy, dx)
+                theta = np.arctan2(dy, dx)
                 if self.obstacle_free(node, x_new, theta):
                     node.parent = n - 1
                     node.cost = scost
@@ -359,9 +365,9 @@ class RRTStar:
             line_strip.scale.x = 0.05
 
             line_strip.color.a = 1.0
-            line_strip.color.r = 1.0
+            line_strip.color.r = 0.0
             line_strip.color.g = 0.0
-            line_strip.color.b = 0.0
+            line_strip.color.b = 1.0
 
             # marker orientaiton
             line_strip.pose.orientation.x = 0.0
@@ -377,28 +383,27 @@ class RRTStar:
             # marker line points
             line_strip.points = []
 
-            for node in self.nodes:
-                if node.parent is not None:
-                    parent = self.nodes[node.parent]
+            # for node in self.nodes:
+                # if node.parent is not None:
+                    # parent = self.nodes[node.parent]
 
                     # plt.plot([node.x, parent.x], [node.y, parent.y], "-g")
 
-                    theta = math.atan2(node.y - parent.y, node.x - parent.x)
+                    # theta = np.arctan2(node.y - parent.y, node.x - parent.x)
 
-                    dx = math.sin(theta) * self.PATH_WIDTH
-                    dy = math.cos(theta) * self.PATH_WIDTH
+                    # dx = np.sin(theta) * self.PATH_WIDTH
+                    # dy = np.cos(theta) * self.PATH_WIDTH
 
                     # plt.plot([parent.x + dx, node.x + dx], [parent.y - dy, node.y - dy], "-g")
                     # plt.plot([parent.x - dx, node.x - dx], [parent.y + dy, node.y + dy], "-g")
 
-            x, y = self.coords[:2]
+            # x, y = self.coords[:2]
             # plt.plot(x, y, "ob")
-            x, y = self.goal[:2]
+            # x, y = self.goal[:2]
             # plt.plot(x, y, "or")
             # plt.axis([self.x0, self.x0 + self.map_width, self.y0 + self.map_height, self.y0])
 
-            # plt.imshow(self.permissible_region,
-            #            extent=[self.x0, self.x0 + self.map_width, self.y0 + self.map_height, self.y0])
+            # plt.imshow(self.permissible_region, extent=[self.x0, self.x0 + self.map_width, self.y0 + self.map_height, self.y0])
             # plt.pause(0.01)
 
             for node in self.path:
@@ -409,19 +414,7 @@ class RRTStar:
                 line_strip.points.append(new_point)
 
             # Publish the Marker
-            # self.viz_pub.publish(line_strip)
-
-            # visualizes the computed path in RVIZ
-            # self.visualize_path()
-
-    # @staticmethod
-    # def visualize_path():
-    #     line_strip = Marker()
-    #     line_strip.type = line_strip.LINE_STRIP
-    #     line_strip.action = line_strip.ADD
-    #     line_strip.header.frame_id = "/map"
-    #
-    #     line_strip.ns = "path"
+            self.viz_pub.publish(line_strip)
 
 
 if __name__ == "__main__":
