@@ -33,6 +33,7 @@ class MotionPlanner:
         self.last_valid_vel = np.zeros(3)
 
         self.RATE = rospy.get_param("motion_planner/RATE")
+        self.REPLAN_RATE = rospy.get_param("motion_planner/REPLAN_RATE")
         self.XY_GOAL_TOLERANCE = rospy.get_param("motion_planner/XY_GOAL_TOLERANCE")
         self.YAW_GOAL_TOLERANCE = rospy.get_param("motion_planner/YAW_GOAL_TOLERANCE")
         self.V_MAX = rospy.get_param("motion_planner/V_MAX")
@@ -54,17 +55,28 @@ class MotionPlanner:
         self.COLLISION_GAMMA = rospy.get_param("motion_planner/COLLISION_GAMMA")
         # for pure pursuit path following
         self.LOOKAHEAD = rospy.get_param("motion_planner/LOOKAHEAD")  # 0.25
+        self.STEP = rospy.get_param("motion_planner/STEP")
+        self.DESIRED_DIRECS = rospy.get_param("motion_planner/DESIRED_DIRECTIONS_OF_TRAVEL")
         self.look = self.LOOKAHEAD
 
         self.LIDAR_C_A = rospy.get_param("motion_planner/LIDAR_COLLISION_STOP_DISTANCE")
+        self.MAX_LIDAR_DIST = rospy.get_param("motion_planner/MAX_LIDAR_DIST")
+        self.CIRCLE_REPLAN_RATE = rospy.get_param("motion_planner/CIRCLE_REPLAN_RATE")
+
         self.lidar_dist = self.LIDAR_C_A
-        self.iters_since_last_collision = 11
+        self.iters_since_last_collision = 16
         self.color = rospy.get_param("/field/color")
         self.robot_name = rospy.get_param("robot_name")
         self.lidar_point = np.array([rospy.get_param("lidar_x"), rospy.get_param("lidar_y"), rospy.get_param("lidar_a")])
         self.scan = None
         self.ranges = None
         self.angles = None
+        self.fourth_closest = None
+        self.fourth_angle = None
+        self.travel_direc = None
+        self.need_to_make_circle = False
+        self.disable_circle = False
+        self.time_since_last_circle = self.CIRCLE_REPLAN_RATE
         self.indexes = None
         self.scan_mid_ind = None
 
@@ -99,6 +111,9 @@ class MotionPlanner:
         self.permissible_region = None
         # self.map_updated = False
         self.path_found = False
+        self.stuck = False
+        self.checking_if_stuck = 0
+        self.stuck_loc = np.zeros(2)
 
         self.cmd_id = None
         self.t_prev = None
@@ -122,6 +137,7 @@ class MotionPlanner:
         self.pub_current_coords = rospy.Publisher("current_coords", Point, queue_size=1)
         self.lookahead_pnts_pub = rospy.Publisher("lookahead_pnts", Point, queue_size=1)
         self.pub_rangefinders = rospy.Publisher("/rangefinder_data", Marker, queue_size=1)
+        self.path_viz_pub = rospy.Publisher("visualization_msgs/Marker", Marker, queue_size=3)
         rospy.Subscriber("move_command", String, self.cmd_callback, queue_size=1)
         rospy.Subscriber("response", String, self.response_callback, queue_size=1)
         rospy.Subscriber("barrier_rangefinders_data", Int32MultiArray, self.rangefinder_data_callback, queue_size=1)
@@ -148,12 +164,6 @@ class MotionPlanner:
             self.mutex.release()
             return
 
-        # if not self.map_updated:
-        #     self.set_speed(np.zeros(3))
-        #     rospy.loginfo('Stopping because the map has not been updated yet')
-        #     self.mutex.release()
-        #     return
-
         # current linear and angular goal distance
         goal_distance = np.zeros(3)
         goal_distance = self.distance(self.coords, self.goal)
@@ -168,30 +178,23 @@ class MotionPlanner:
             self.mutex.release()
             return
 
-        # active_rangefinders, stop_ranges = self.choose_active_rangefinders()
-        # # rospy.loginfo("Active rangefinders: " + str(active_rangefinders) + "\t with ranges: " + str(stop_ranges))
-        # # rospy.loginfo("Active rangefinders data: " + str(self.rangefinder_data[active_rangefinders]) + ". Status: " + str(self.rangefinder_status[active_rangefinders]))
-        #
         # # CHOOSE VELOCITY COMMAND.
-        #
-        # if np.any(self.rangefinder_data[active_rangefinders] < stop_ranges):
-        #     # collision avoidance
-        #     rospy.loginfo('EMERGENCY STOP: collision avoidance. Active rangefinder error.')
-        #     vel = -self.last_valid_vel[:]
-        #     vel[2] = 0
-        #     self.iters_since_last_collision = 0
-        #     self.lidar_dist += 10
-        #     print "INCREASING LIDAR DIST TO: ", self.lidar_dist
+
         if self.avoid_direc:
             # rospy.loginfo('AVOIDING COLLISION: picking new direction to move.', string(self.avoid_direc))
             print "AVOIDING COLLISION: picking new direction to move.", self.avoid_direc
             self.iters_since_last_collision += 1
             vel = self.avoid_vel
+            if self.need_to_make_circle and self.path != None and self.time_since_last_circle >= self.CIRCLE_REPLAN_RATE:
+                self.update_path()
+                self.need_to_make_circle = False
+                self.time_since_last_circle = 0
         else:
-            # if self.iters_since_last_collision > 10:
-            #     self.lidar_dist = self.LIDAR_C_A
-            #     print "RESETING ITERS SINCE LAST COLLISION"
-            # self.iters_since_last_collision+=2
+            if self.need_to_make_circle and self.path != None and self.time_since_last_circle >= self.CIRCLE_REPLAN_RATE:
+                self.update_path()
+                self.need_to_make_circle = False
+                self.time_since_last_circle = 0
+
             t = rospy.get_time()
             dt = t - self.t_prev
             self.t_prev = t
@@ -218,22 +221,24 @@ class MotionPlanner:
             # rospy.loginfo('Final Speed Limit:\t' + str(speed_limit))
 
             # Find a path and then follow it
-            # self.find_path_rrtstar()
-            if self.path == []:
+            if self.path == [] or self.stuck:
                 self.set_speed(np.zeros(3))
                 rospy.loginfo('Stopping because the path has not been found yet')
                 self.mutex.release()
                 return
-            #self.path = None #uncomment later
+            # self.path = None #uncomment later
             vel = None
             wrong_coords = False
+            # self.path = None
             if self.path is not None:
                 # print "following path"
                 vel = self.follow_path()
                 vel[0] *= goal_d*3
                 vel[1] *= goal_d*3
-                vel[2] = self.V_MAX * goal_distance[2] / goal_d
-                if abs(vel[0]) < .05 and abs(vel[1] < .05):
+                # vel[2] = self.find_rot(np.arctan2(vel[1], vel[0]))
+                vel[2] = self.W_MAX * goal_distance[2] / goal_d
+                if np.linalg.norm(vel[:2]) < self.V_MAX/2:
+                # if abs(vel[0]) < .05 and abs(vel[1] < .05):
                     vel = None
             if not vel:
                 # maximum speed in goal distance proportion
@@ -260,28 +265,36 @@ class MotionPlanner:
             self.last_valid_vel = vel
 
         active_rangefinders, stop_ranges = self.choose_active_rangefinders()
-        # rospy.loginfo("Active rangefinders: " + str(active_rangefinders) + "\t with ranges: " + str(stop_ranges))
-        # rospy.loginfo("Active rangefinders data: " + str(self.rangefinder_data[active_rangefinders]) + ". Status: " + str(self.rangefinder_status[active_rangefinders]))
-        # CHOOSE VELOCITY COMMAND.
-        if np.any(self.rangefinder_data[active_rangefinders] < stop_ranges):
+
+        a, b, c = active_rangefinders == 0, active_rangefinders == 2, active_rangefinders == 6
+        stop_ranges[a] += 50
+        stop_ranges[b] += 25
+        stop_ranges[c] += 25
+
+        if np.any(self.rangefinder_data[active_rangefinders][self.rangefinder_data[active_rangefinders] > 0] < stop_ranges[self.rangefinder_data[active_rangefinders] > 0]):
             # collision avoidance
             rospy.loginfo('EMERGENCY STOP: collision avoidance. Active rangefinder error.')
             vel = -self.last_valid_vel[:]
             vel[2] = 0
             self.iters_since_last_collision = 0
-            self.lidar_dist += 10
-            self.look += .1
+            self.lidar_dist = min(self.MAX_LIDAR_DIST, self.lidar_dist + 10)
+            # self.look += .1
             print "INCREASING LIDAR DIST TO: ", self.lidar_dist, "AND LOOKAHEAD DIST TO: ", self.look
+
+            if self.time_since_last_circle >= self.CIRCLE_REPLAN_RATE and self.path != [] and self.fourth_closest < 500:
+                self.need_to_make_circle = True
+
         elif not self.avoid_direc:
-            if self.iters_since_last_collision > 10:
+            if self.iters_since_last_collision > 15:
                 self.lidar_dist = self.LIDAR_C_A
-                self.look = self.LOOKAHEAD
-                print "RESETING ITERS_SINCE_LAST_COLLISION and lookahead"
-            self.iters_since_last_collision+=2
+                # self.look = self.LOOKAHEAD
+            self.iters_since_last_collision += 2
 
         # send cmd: vel in robot frame
         self.set_speed(vel)
         # rospy.loginfo('Vel cmd\t:' + str(vel))
+        self.time_since_last_circle += 1
+        self.check_if_stuck()
 
         self.mutex.release()
 
@@ -300,6 +313,10 @@ class MotionPlanner:
         # print self.ranges
         self.ranges[self.ranges < scan.range_min*1000] = 0
         self.ranges[self.ranges > scan.range_max*1000] = 0
+        forward_ranges = self.ranges[~((rel_angles < np.pi/3)-(rel_angles > -np.pi/3)) & (self.ranges > 0)]
+        self.fourth_closest = np.sort(forward_ranges)[0]
+        self.fourth_angle = self.angles[np.where(self.ranges == self.fourth_closest)][np.argmin(np.abs(self.angles[np.where(self.ranges == self.fourth_closest)]))]
+        self.travel_direc = motion_angle
         # print self.ranges
         collision_pnts = self.ranges[0 < self.ranges][self.ranges[0 < self.ranges] < self.lidar_dist]
         if collision_pnts.shape[0] > 0:
@@ -332,8 +349,8 @@ class MotionPlanner:
                 self.avoid_vel[2] = self.last_valid_vel[2]
             else:
                 self.avoid_vel[:2] = -self.last_valid_vel[:2]
-                self.lidar_dist += 10
-                self.look += .1
+                self.lidar_dist = min(self.MAX_LIDAR_DIST, self.lidar_dist+10)
+                # self.look += .1
                 print "need to back up"
                 print "increased lidar dist to: ", self.lidar_dist, "and lookahead dist to: ", self.look
             if self.avoid_vel[0] > self.C_A_MAX and self.avoid_vel[0] > self.avoid_vel[1]:
@@ -349,8 +366,101 @@ class MotionPlanner:
         self.path_found = True
         self.path = self.poly_to_list(msg.points)
 
+    def update_path(self):
+        self.disable_circle = True
+        dist = self.fourth_closest / 800.0
+        print "ADDING CIRCLE TO PATH WITH RADIUS:", dist
+        center_local = np.array([dist*np.cos(self.fourth_angle+self.travel_direc), dist*np.sin(self.fourth_angle+self.travel_direc)])
+        center_global = self.bot_to_global_transform(center_local, self.coords)
+        print "4angle:", self.fourth_angle, "travel dir:", self.travel_direc
+        print "local:", center_local, "global:", center_global, "pose:", self.coords
+        ind = self.find_closest_segment(center_global)
+        index = ind
+        ret_type = None
+        rad = dist
+        while ret_type != 2 and ret_type != 3:  # types 2, 3 imply either 2 intersections or 1 in desired direction
+            seg = [self.path[index], self.path[index + 1]]
+            ret_type, closest_pnt, second_intersect = self.goal_point(center_global, rad, seg)
+            if ret_type == 3:
+                first_intersect = closest_pnt
+                first_ind = index + 1
+            if index < self.path.shape[0] - 2:
+                index += 1
+            elif ret_type == 1:
+                second_intersect = self.path[-1]
+                ret_type = 2
+            else:
+                self.time_since_last_circle = self.CIRCLE_REPLAN_RATE
+                return
+        second_ind = index
+        # rad1 = rad
+        # rad = dist
+        # index = ind
+        # while ret_type != 1 and ret_type != 3:
+        #     seg = [self.path[index], self.path[index + 1]]
+        #     ret_type, closest_pnt, first_intersect = self.goal_point(center_global, rad, seg)
+        #     if index > 0:
+        #         index -= 1
+        #     elif ret_type == 2:
+        #         first_intersect = self.path[0]
+        #         ret_type = 1
+        #     else:
+        #         rad *= 1.5
+        #         index = ind
+        # if ret_type != 3:
+        #     first_ind = index + 1
+        first_ind = self.find_closest_segment(self.coords[:2])
+
+        circle = self.make_circle(center_global, rad, self.path[first_ind], self.path[second_ind])
+        print first_ind, second_ind, "INDSSSSSS"
+        self.path = np.concatenate((self.path[:min(first_ind, second_ind)], circle, self.path[second_ind:]))
+        print circle
+        self.visualize_path()
+
+    def make_circle(self, center, r, start, stop):
+        start_angle = np.arctan2(start[1] - center[1], center[0] - start[0])
+        stop_angle = np.arctan2(stop[1] - center[1], center[0] - stop[0])
+        angle_diff = (stop_angle - start_angle) % (2*np.pi)
+        angle_increment = self.STEP / r
+        iters = int(angle_diff / angle_increment)
+        print iters, "iters"
+        circle = np.array([(start[0], start[1])])
+        for _ in xrange(iters):
+            circle = np.append(circle, [(center[0] - np.cos(start_angle)*r, center[1] + np.sin(start_angle)*r)], axis = 0)
+            start_angle += angle_increment
+        return circle
+
+    def check_if_stuck(self):
+        if not self.checking_if_stuck:
+            self.stuck_loc = self.coords[:2]
+            self.checking_if_stuck += 1
+        elif self.checking_if_stuck <= self.REPLAN_RATE:
+            if np.linalg.norm(self.coords[:2] - self.stuck_loc) <= 0.3:
+                self.checking_if_stuck += 1
+            else:
+                self.checking_if_stuck = 0
+        else:
+            self.checking_if_stuck = 0
+            # self.stuck = True
+            self.path = []
+            print "++++++++++++++++++++++++++++++++++++++++++++++++++++"
+            print "STUCK. PLANNING NEW PATH"
+            print "++++++++++++++++++++++++++++++++++++++++++++++++++++"
+            goal = Point()
+            goal.x = self.goal[0]
+            goal.y = self.goal[1]
+            goal.z = self.goal[2]
+            start = Point()
+            start.x = self.coords[0]
+            start.y = self.coords[1]
+            start.z = self.coords[2]
+            self.pub_current_coords.publish(start)
+            self.path_plan_pub.publish(goal)
+
     @staticmethod
     def poly_to_list(points):
+        if points == []:
+            return None
         pnts = []
         for pt in points:
             pnts.append((pt.x, pt.y))
@@ -359,6 +469,12 @@ class MotionPlanner:
     def no_path(self, msg):
         if msg:
             self.path = None
+
+    def find_rot(self, travel):
+        desired_direction = self.DESIRED_DIRECS[np.abs(self.goal[2] - self.DESIRED_DIRECS).argmin()]
+        desired_direction = self.DESIRED_DIRECS[np.abs(travel - self.DESIRED_DIRECS).argmin()]
+        return desired_direction - travel
+        return (desired_direction - travel + np.pi) % (2*np.pi) - np.pi
 
     def follow_path(self):
         if self.path != None:
@@ -369,14 +485,14 @@ class MotionPlanner:
             look = self.LOOKAHEAD
             while ret_type != 2 and ret_type != 3:  # types 2, 3 imply either 2 intersections or 1 in desired direction
                 seg = [self.path[index], self.path[index+1]]
-                ret_type, closest_pnt, intersect_pnt = self.goal_point(self.coords[:2], self.look, seg)
+                ret_type, closest_pnt, intersect_pnt = self.goal_point(self.coords[:2], look, seg)
                 if index < self.path.shape[0]-2:
                     index += 1
-                elif ret_type == 1:
+                elif ret_type == 1 or ret_type == -1:
                     intersect_pnt = self.path[-1]
                     ret_type = 2
                 else:
-                    self.look *= 1.5
+                    look *= 1.5
                     index = ind
                 # if ret_type != 2 and ret_type != 3:
                 #     self.set_speed(np.zeros(3))
@@ -472,7 +588,10 @@ class MotionPlanner:
         if not a:
             return -1, None, None
         b = float(2*np.dot(v, (P1 - Q)))
-        c = np.dot(P1, P1) + np.dot(Q, Q) - 2*np.dot(P1, Q) - r**2
+        try:
+            c = np.dot(P1, P1) + np.dot(Q, Q) - 2*np.dot(P1, Q) - r**2
+        except OverflowError:
+            return 0, None, None
 
         disc = b**2-4*a*c
         if disc < 0:
@@ -486,7 +605,11 @@ class MotionPlanner:
         # Closest point on extended line to center of circle is P1 + t*V where t is listed below
         t = max(min(1.0, -b / (2*a)), 0.0)
 
-        if not (0 <= t1 <= 1):
+        if not (0 <= t1 <= 1 or 0 <= t2 <= 1):
+            # Line segment is inside circle but too short, need to shrink circle radius
+            return -1, None, None
+
+        elif not (0 <= t1 <= 1):
             # t2 intersects, but not t1. return the closest point and goal point
             return 1, P1 + t*v, P1 + t2*v
 
@@ -494,13 +617,10 @@ class MotionPlanner:
             # t1 intersects, but not t2, return the closest point and goal point
             return 2, P1 + t*v, P1 + t1*v
 
-        elif not (0 <= t1 <= 1 or 0 <= t2 <= 1):
-            # Line segment is inside circle but too short, need to shrink circle radius
-            return -1, None, None
-
         else:
             goal_t = max((t1-t), (t2-t)) + t
-            return 3, P1 + t*v, P1 + goal_t*v
+            other_t = min((t1-t), (t2-t)) + t
+            return 3, P1 + other_t*v, P1 + goal_t*v
 
     @staticmethod
     def curvature(lookahead, x):
@@ -573,12 +693,18 @@ class MotionPlanner:
         ans[:2] = np.matmul(M, ans[:2].reshape((2, 1))).reshape(2)
         return ans
 
-    def global_to_bot_transform(self, pnt, bot_pose):
-        # quat = bot_pose.orientation
+    @staticmethod
+    def global_to_bot_transform(pnt, bot_pose):
         new_pnt = pnt - np.array([bot_pose[0], bot_pose[1]])
         c, s = np.cos(-bot_pose[2]), np.sin(-bot_pose[2])
-        # return np.matrix([[c, -s], [s, c]]) * pnt.transpose()
         return np.array([c * new_pnt[0] - s * new_pnt[1], s * new_pnt[0] + c * new_pnt[1]])
+
+    @staticmethod
+    def bot_to_global_transform(pnt, bot_pose):
+        c, s = np.cos(bot_pose[2]), np.sin(bot_pose[2])
+        dx = pnt[0] * c - pnt[1] * s
+        dy = pnt[0] * s + pnt[1] * c
+        return np.array([dx + bot_pose[0], dy + bot_pose[1]])
 
     def terminate_following(self):
         rospy.loginfo("Setting robot speed to zero.")
@@ -854,6 +980,66 @@ class MotionPlanner:
         x = self.coords[0] - (self.RF_DISTS[rng]+dist) * np.cos(self.coords[2]+self.RANGEFINDER_ANGLES[rng])
         y = self.coords[1] + (self.RF_DISTS[rng]+dist) * np.sin(self.coords[2]+self.RANGEFINDER_ANGLES[rng])
         return x, y
+
+    def visualize_path(self):
+        line_strip = Marker()
+        line_strip.type = line_strip.LINE_STRIP
+        line_strip.action = line_strip.ADD
+        line_strip.header.frame_id = "/map"
+
+        line_strip.scale.x = 0.05
+
+        line_strip.color.a = 1.0
+        line_strip.color.r = 0.0
+        line_strip.color.g = 0.0
+        line_strip.color.b = 1.0
+
+        # marker orientaiton
+        line_strip.pose.orientation.x = 0.0
+        line_strip.pose.orientation.y = 0.0
+        line_strip.pose.orientation.z = 0.0
+        line_strip.pose.orientation.w = 1.0
+
+        # marker position
+        line_strip.pose.position.x = 0.0
+        line_strip.pose.position.y = 0.0
+        line_strip.pose.position.z = 0.0
+
+        # marker line points
+        line_strip.points = []
+
+        # for node in self.nodes:
+            # if node.parent is not None:
+                # parent = self.nodes[node.parent]
+
+                # plt.plot([node.x, parent.x], [node.y, parent.y], "-g")
+
+                # theta = np.arctan2(node.y - parent.y, node.x - parent.x)
+
+                # dx = np.sin(theta) * self.PATH_WIDTH
+                # dy = np.cos(theta) * self.PATH_WIDTH
+
+                # plt.plot([parent.x + dx, node.x + dx], [parent.y - dy, node.y - dy], "-g")
+                # plt.plot([parent.x - dx, node.x - dx], [parent.y + dy, node.y + dy], "-g")
+
+        # x, y = self.coords[:2]
+        # plt.plot(x, y, "ob")
+        # x, y = self.goal[:2]
+        # plt.plot(x, y, "or")
+        # plt.axis([self.x0, self.x0 + self.map_width, self.y0 + self.map_height, self.y0])
+
+        # plt.imshow(self.permissible_region, extent=[self.x0, self.x0 + self.map_width, self.y0 + self.map_height, self.y0])
+        # plt.pause(0.01)
+
+        for node in self.path:
+            new_point = Point()
+            new_point.x = node[0]
+            new_point.y = node[1]
+            new_point.z = 0.0
+            line_strip.points.append(new_point)
+
+        # Publish the Marker
+        self.path_viz_pub.publish(line_strip)
 
 
 

@@ -6,6 +6,9 @@ Panels:
       Expanded:
         - /TF1/Frames1
         - /TF1/Tree1
+        - /Marker1
+        - /Marker2
+        - /Marker3
       Splitter Ratio: 0.592190862
     Tree Height: 1142
   - Class: rviz/Selection
@@ -26,7 +29,7 @@ Panels:
     Experimental: false
     Name: Time
     SyncMode: 0
-    SyncSource: SecondaryLaserScan
+    SyncSource: ""
 Visualization Manager:
   Class: ""
   Displays:
@@ -97,11 +100,12 @@ Visualization Manager:
       Show Axes: true
       Show Names: true
       Tree:
-        map:
-          secondary_robot_odom:
-            secondary_robot:
-              secondary_robot_laser:
-                {}
+        secondary_robot_odom:
+          map:
+            {}
+          secondary_robot:
+            secondary_robot_laser:
+              {}
       Update Interval: 0
       Value: true
     - Attached Body Color: 150; 50; 150
@@ -501,12 +505,20 @@ Visualization Manager:
       Marker Topic: /secondary_robot/visualization_msgs/Marker
       Name: Marker
       Namespaces:
-        {}
+        "": true
       Queue Size: 100
       Value: true
     - Class: rviz/Marker
       Enabled: true
       Marker Topic: /rangefinder_data
+      Name: Marker
+      Namespaces:
+        {}
+      Queue Size: 100
+      Value: true
+    - Class: rviz/Marker
+      Enabled: true
+      Marker Topic: /secondary_robot/2/visualization_msgs/Marker
       Name: Marker
       Namespaces:
         "": true

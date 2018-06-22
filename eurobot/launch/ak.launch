@@ -8,8 +8,8 @@
   <include file="$(find eurobot)/launch/params.launch"/>
   
   <!-- MULTYMASTER -->
-  <!-- <include file="$(find eurobot)/launch/secondary_multimaster.launch"/> -->
-  
+  <include file="$(find eurobot)/launch/secondary_multimaster.launch"/>
+
   <include file="$(find ak_eurobot_navigation)/launch/navigation_secondary.launch"/>
 
   <group ns="secondary_robot">
@@ -23,6 +23,7 @@
 
   </group>
 
-  <node pkg="rosbag" type="record" name="rosbag_record_secondary_robot" args="-o $(find eurobot)/bag/secondary_robot /tf /secondary_robot/scan" />  
+  <node pkg="ak_eurobot_navigation" name="map_server" type="map_server.py" respawn="true"/>
+  <!--<node pkg="rosbag" type="record" name="rosbag_record_secondary_robot" args="-o $(find eurobot)/bag/secondary_robot /tf /secondary_robot/scan" />-->
 
 </launch>

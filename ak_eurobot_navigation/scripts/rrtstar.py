@@ -46,8 +46,11 @@ class RRTStar:
         self.permissible_region = None
         self.map_updated = False
 
+        self.RESOLUTION = 0.05
+
         self.new_path = rospy.Publisher('rrt_path', Polygon, queue_size=1)
         self.viz_pub = rospy.Publisher("visualization_msgs/Marker", Marker, queue_size=3)
+        self.viz_pub2 = rospy.Publisher("2/visualization_msgs/Marker", Marker, queue_size=3)
         self.no_path = rospy.Publisher("no_path_found", Bool, queue_size=1)
         rospy.Subscriber('current_coords', Point, self.update_coords, queue_size=1)
         rospy.Subscriber('new_goal_loc', Point, self.find_path_rrtstar, queue_size=1)
@@ -60,8 +63,7 @@ class RRTStar:
         self.coords[0] = msg.x
         self.coords[1] = msg.y
         self.coords[2] = msg.z
-        print (self.coords[:2] - [self.x0, self.y0])/self.resolution, "coooooooords"
-        print (1.0 - self.x0)/self.resolution, (1.0 - self.y0)/self.resolution, "end pntttt"
+        self.map_updated = False
 
     def update_map(self, msg):
         # print "Updating Map"
@@ -75,12 +77,8 @@ class RRTStar:
             array255 = np.array(msg.data).reshape((msg.info.height, msg.info.width))
             self.permissible_region = np.ones_like(array255, dtype=bool)
             self.permissible_region[array255 == 100] = 0  # setting occupied regions (100) to 0. Unoccupied regions are a 1
-            # self.permissible_region[34:74, 0:34] = 1
-            # self.permissible_region[82:122, 82:122] = 1
-            # self.permissible_region[53:93, 34:74] = 1
             self.map_updated = True
-            # print self.permissible_region
-            # self.permissible_region
+            print "Map Updated"
 
     def find_path_rrtstar(self, msg):
         while not self.map_updated:
@@ -93,7 +91,7 @@ class RRTStar:
         # plt.plot((self.goal[0]-self.x0) / self.resolution, (self.goal[1]-self.y0) / self.resolution, 'or')
         # plt.pause(.001)
         # plt.imshow(self.permissible_region)
-        # plt.pause(0.01)
+        # plt.pause(0.001)
 
         x, y, th = self.coords
         start_node = Node(x, y)
@@ -157,6 +155,7 @@ class RRTStar:
                         return
                     path = self.get_path(last_idx)
                     self.path = np.array(path)
+                    print self.path, "path"
                     self.new_path.publish(self.to_poly(self.path))
                     self.visualize()
                     return
@@ -342,20 +341,114 @@ class RRTStar:
             last_idx = node.parent
         path.append((self.coords[0], self.coords[1]))
         path.reverse()
+        path = np.array(path)
+        self.visualize(2)
+        result = self.bezier_path(path[0], path[path.shape[0]/2], path[-1])
+        interval = int(np.ceil(path.shape[0]/2.0))-1
+        while result == None and interval > 2:
+            print interval, "interval"
+            for i in xrange(0, path.shape[0] - interval, interval):
+                inter = interval
+                if i+inter >= path.shape[0] - interval:
+                    inter = path.shape[0] - i - 1
+                new_result = self.bezier_path(path[i], path[(i+inter)/2], path[i+inter])
+                if new_result is None:
+                    result = None
+                    interval /= 2
+                    break
+                else:
+                    # print new_result, "new result"
+                    if i == 0:
+                        result = new_result
+                    else:
+                        result = np.concatenate((result[:i], new_result))
+        if result is not None:
+            return result
+        print "No Bezier Path Found"
         return path
+
+    def bezier_path(self, P0, P1, P2):
+        max_len = int(((np.linalg.norm(P1 - P0) + np.linalg.norm(P2 - P1))) / self.RESOLUTION)
+        if not max_len:
+            return
+        # path = np.zeros((max_len, 2))
+        t = 0
+        dt = 1.0 / (5 * max_len)
+        # path[0] = P0
+        path = np.array([P0])
+        i = 1
+
+        while t < 1:
+            t += dt
+            potential_point = self.bezier_curve(P0, P1, P2, t)
+            if np.linalg.norm(path[i - 1] - potential_point) >= self.RESOLUTION:
+                theta = np.arctan2(potential_point[1] - path[i-1, 1], potential_point[0] - path[i-1, 0])
+                if self.nodeless_obstacle_free(path[i-1], potential_point, theta):
+                    path = np.append(path, [potential_point], axis=0)
+                    i += 1
+                    if np.linalg.norm(P2 - potential_point) < self.RESOLUTION:
+                        break
+                else:
+                    return None
+        path = np.append(path, [P2], axis=0)
+        n = i + 1
+        # path[:n, 2] = np.linspace(P0[2], P2[2], n)
+
+        return path[:n]
+
+    @staticmethod
+    def bezier_curve(P0, P1, P2, t):
+        return (1 - t) ** 2 * P0[:2] + 2 * t * (1 - t) * P1[:2] + t ** 2 * P2[:2]
+
+    def nodeless_obstacle_free(self, nearest_node, new_node, theta):
+        """ Checks if the path from x_near to x_new is obstacle free """
+
+        dx = np.sin(theta) * self.PATH_WIDTH
+        dy = np.cos(theta) * self.PATH_WIDTH
+        # plt.plot([(new_node[0] - self.x0) / self.resolution, (nearest_node[0] - self.x0) / self.resolution],
+        #          [(new_node[1] - self.y0) / self.resolution, (nearest_node[1] - self.y0) / self.resolution])
+        # plt.pause(.001)
+
+        if nearest_node[0] < new_node[0]:
+            bound0 = ((nearest_node[0], nearest_node[1]), (new_node[0], new_node[1]))
+            bound1 = ((nearest_node[0] + dx, nearest_node[1] - dy), (new_node[0] + dx, new_node[1] - dy))
+            bound2 = ((nearest_node[0] - dx, nearest_node[1] + dy), (new_node[0] - dx, new_node[1] + dy))
+            dx*=.5
+            dy*=.5
+            bound3 = ((nearest_node[0] + dx, nearest_node[1] - dy), (new_node[0] + dx, new_node[1] - dy))
+            bound4 = ((nearest_node[0] - dx, nearest_node[1] + dy), (new_node[0] - dx, new_node[1] + dy))
+        else:
+            bound0 = ((new_node[0], new_node[1]), (nearest_node[0], nearest_node[1]))
+            bound1 = ((new_node[0] + dx, new_node[1] - dy), (nearest_node[0] + dx, nearest_node[1] - dy))
+            bound2 = ((new_node[0] - dx, new_node[1] + dy), (nearest_node[0] - dx, nearest_node[1] + dy))
+            dx*=.5
+            dy*=.5
+            bound3 = ((new_node[0] + dx, new_node[1] - dy), (nearest_node[0] + dx, nearest_node[1] - dy))
+            bound4 = ((new_node[0] - dx, new_node[1] + dy), (nearest_node[0] - dx, nearest_node[1] + dy))
+
+        if self.line_collision(bound0) or self.line_collision(bound1) or self.line_collision(bound2):# or self.line_collision(bound3) or self.line_collision(bound4):
+            return False
+        else:
+            return True
 
     @staticmethod
     def to_poly(path):
         poly = Polygon()
-        for pt in path:
-            point = Point()
-            point.x = pt[0]
-            point.y = pt[1]
-            point.z = 0.0
-            poly.points.append(point)
-        return poly
+        poly.points = []
+        if path is None:
+            return poly
+        try:
+            for pt in path:
+                point = Point()
+                point.x = pt[0]
+                point.y = pt[1]
+                point.z = 0.0
+                poly.points.append(point)
+            return poly
+        except TypeError:
+            return poly
 
-    def visualize(self):
+    def visualize(self, topic=1):
         if self.nodes:
             line_strip = Marker()
             line_strip.type = line_strip.LINE_STRIP
@@ -414,6 +507,10 @@ class RRTStar:
                 line_strip.points.append(new_point)
 
             # Publish the Marker
+            if topic == 2:
+                print "SHOWING TWO PATHS"
+                line_strip.color.r = 1.0
+                self.viz_pub2.publish(line_strip)
             self.viz_pub.publish(line_strip)
 
 
