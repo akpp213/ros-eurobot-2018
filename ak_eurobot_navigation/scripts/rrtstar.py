@@ -4,7 +4,9 @@ from nav_msgs.msg import OccupancyGrid
 from geometry_msgs.msg import Point, Polygon
 from visualization_msgs.msg import Marker
 from std_msgs.msg import Bool
+from sensor_msgs.msg import PointCloud
 import numpy as np
+import pandas as pd
 # import matplotlib.pyplot as plt
 
 
@@ -50,12 +52,13 @@ class RRTStar:
 
         self.new_path = rospy.Publisher('rrt_path', Polygon, queue_size=1)
         self.viz_pub = rospy.Publisher("visualization_msgs/Marker", Marker, queue_size=3)
-        self.viz_pub2 = rospy.Publisher("2/visualization_msgs/Marker", Marker, queue_size=3)
+        self.viz_pub2 = rospy.Publisher("visualization_msgs/Marker2", Marker, queue_size=3)
         self.no_path = rospy.Publisher("no_path_found", Bool, queue_size=1)
         rospy.Subscriber('current_coords', Point, self.update_coords, queue_size=1)
         rospy.Subscriber('new_goal_loc', Point, self.find_path_rrtstar, queue_size=1)
-        rospy.Subscriber("/main_robot/map", OccupancyGrid, self.update_map, queue_size=1)
-        rospy.Subscriber("/secondary_robot/map", OccupancyGrid, self.update_map, queue_size=1)
+        rospy.Subscriber("/main_robot/map", OccupancyGrid, self.update_map, queue_size=3)
+        rospy.Subscriber("/secondary_robot/map", OccupancyGrid, self.update_map, queue_size=3)
+        rospy.Subscriber("/map_server/opponent_robots", PointCloud, self.detected_robots_callback, queue_size=1)
         # rospy.Subscriber("lookahead_pnts", Point, self.add_look, queue_size=1)
 
     def update_coords(self, msg):
@@ -80,9 +83,17 @@ class RRTStar:
             self.map_updated = True
             print "Map Updated"
 
+    def detected_robots_callback(self, data):
+        if len(data.points) == 0:
+            self.opponent_robots = np.array([])
+        else:
+            self.opponent_robots = np.array([[robot.x, robot.y] for robot in data.points])
+        self.robots_upd_time = data.header.stamp
+
     def find_path_rrtstar(self, msg):
         while not self.map_updated:
-            print "MAP NOT UPDATED YET"
+            pass
+            # print "MAP NOT UPDATED YET"
         self.goal[0] = msg.x
         self.goal[1] = msg.y
         self.goal[2] = msg.z
@@ -154,7 +165,7 @@ class RRTStar:
                     if last_idx is None:
                         return
                     path = self.get_path(last_idx)
-                    self.path = np.array(path)
+                    self.path = pd.unique(np.array(path))
                     print self.path, "path"
                     self.new_path.publish(self.to_poly(self.path))
                     self.visualize()
@@ -345,7 +356,7 @@ class RRTStar:
         self.visualize(2)
         result = self.bezier_path(path[0], path[path.shape[0]/2], path[-1])
         interval = int(np.ceil(path.shape[0]/2.0))-1
-        while result == None and interval > 2:
+        while result is None and interval > 2:
             print interval, "interval"
             for i in xrange(0, path.shape[0] - interval, interval):
                 inter = interval
@@ -370,7 +381,7 @@ class RRTStar:
     def bezier_path(self, P0, P1, P2):
         max_len = int(((np.linalg.norm(P1 - P0) + np.linalg.norm(P2 - P1))) / self.RESOLUTION)
         if not max_len:
-            return
+            return None
         # path = np.zeros((max_len, 2))
         t = 0
         dt = 1.0 / (5 * max_len)
