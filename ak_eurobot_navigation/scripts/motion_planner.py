@@ -60,7 +60,8 @@ class MotionPlanner:
         # for pure pursuit path following
         self.LOOKAHEAD = rospy.get_param("motion_planner/LOOKAHEAD")  # 0.25
         self.STEP = rospy.get_param("motion_planner/STEP")
-        self.DESIRED_DIRECS = rospy.get_param("motion_planner/DESIRED_DIRECTIONS_OF_TRAVEL")
+        self.DESIRED_DIRECS = np.array(rospy.get_param("motion_planner/DESIRED_DIRECTIONS_OF_TRAVEL"))
+        self.desired_direction = 0.0
         self.look = self.LOOKAHEAD
 
         self.LIDAR_C_A = rospy.get_param("motion_planner/LIDAR_COLLISION_STOP_DISTANCE")
@@ -190,6 +191,7 @@ class MotionPlanner:
             self.mutex.release()
             return
 
+        # print self.desired_direction, "desired direction of travel"
         # current linear and angular goal distance
         goal_distance = np.zeros(3)
         goal_distance = self.distance(self.coords, self.goal)
@@ -223,10 +225,11 @@ class MotionPlanner:
 
             active_rangefinders, stop_ranges = self.choose_active_rangefinders()
 
-            a, b, c = active_rangefinders == 0, active_rangefinders == 2, active_rangefinders == 6
-            stop_ranges[a] += 50
-            stop_ranges[b] += 25
-            stop_ranges[c] += 25
+            if self.robot_name == "secondary_robot":
+                a, b, c = active_rangefinders == 0, active_rangefinders == 2, active_rangefinders == 6
+                stop_ranges[a] += 50
+                stop_ranges[b] += 25
+                stop_ranges[c] += 25
 
             t = rospy.get_time()
             dt = t - self.t_prev
@@ -249,7 +252,7 @@ class MotionPlanner:
                             speed_limit_collision.append(min(self.distance_to_closest_robot() * self.COLLISION_AVOIDANCE_COEFFICIENT, ((self.rangefinder_data[active_rangefinders[i]] - stop_ranges[i]) / (255.0 - stop_ranges[i])) ** self.COLLISION_GAMMA * self.V_MAX))
                     else:
                         speed_limit_collision.append(self.distance_to_closest_robot() * self.COLLISION_AVOIDANCE_COEFFICIENT)
-                rospy.loginfo('Collision Avoidance  Speed Limit:\t' + str(speed_limit_collision))
+                # rospy.loginfo('Collision Avoidance  Speed Limit:\t' + str(speed_limit_collision))
             else:
                 speed_limit_collision = [self.V_MAX]
             # speed_limit_collision = [self.V_MAX]
@@ -271,8 +274,8 @@ class MotionPlanner:
                 vel = self.follow_path()
                 vel[0] *= goal_d*3
                 vel[1] *= goal_d*3
-                # vel[2] = self.find_rot(np.arctan2(vel[1], vel[0]))
-                vel[2] = self.W_MAX * goal_distance[2] / goal_d
+                vel[2] = -self.W_MAX * self.find_rot(np.arctan2(vel[1], vel[0])) * 3
+                # vel[2] = self.W_MAX * goal_distance[2] / goal_d
                 if np.linalg.norm(vel[:2]) < self.V_MAX/2:
                 # if abs(vel[0]) < .05 and abs(vel[1] < .05):
                     vel = None
@@ -578,14 +581,18 @@ class MotionPlanner:
         return np.array(pnts)
 
     def no_path(self, msg):
-        if msg:
+        print msg
+        if msg.data:
             self.path = None
 
     def find_rot(self, travel):
-        desired_direction = self.DESIRED_DIRECS[np.abs(self.goal[2] - self.DESIRED_DIRECS).argmin()]
-        desired_direction = self.DESIRED_DIRECS[np.abs(travel - self.DESIRED_DIRECS).argmin()]
-        return desired_direction - travel
-        return (desired_direction - travel + np.pi) % (2*np.pi) - np.pi
+        # desired_direction = self.DESIRED_DIRECS[np.abs(self.goal[2] - self.DESIRED_DIRECS).argmin()]
+        # desired_direction = self.DESIRED_DIRECS[np.abs(travel - self.DESIRED_DIRECS).argmin()]
+        # desired_direction = self.DESIRED_DIRECS[np.abs((self.DESIRED_DIRECS - travel + np.pi) % (2*np.pi) - np.pi).argmin()]
+        # return desired_direction - travel
+        turn_rate = (self.desired_direction - travel + np.pi) % (2*np.pi) - np.pi
+        # print turn_rate, "tr"
+        return turn_rate
 
     def follow_path(self):
         if self.path is not None and self.path != []:
@@ -860,6 +867,13 @@ class MotionPlanner:
         rospy.loginfo("Active Rangefinder Zones: " + str(active_rangefinder_zones))
         self.t_prev = rospy.get_time()
         self.goal = goal
+
+        goal_delta_angle = np.arctan2(self.goal[1] - self.coords[1], self.goal[0] - self.coords[0]) - self.goal[2]
+        print goal_delta_angle, "gda"
+        self.desired_direction = self.DESIRED_DIRECS[
+            np.abs((self.DESIRED_DIRECS - goal_delta_angle + np.pi) % (2 * np.pi) - np.pi).argmin()]
+        print self.desired_direction, "DESIRED DIRECTION OF TRAVEL"
+
         goal = Point()
         goal.x = self.goal[0]
         goal.y = self.goal[1]

@@ -1,8 +1,11 @@
 <?xml version="1.0"?>
 <launch>
 
-  <node name="motion_planner" pkg="eurobot_navigation" type="motion_planner.py" ns="main_robot" respawn="true" >
-    <rosparam file="$(find eurobot_navigation)/config/motion_planner_main_robot_params.yaml" command="load" />
+  <node name="rrtstar" pkg="ak_eurobot_navigation" type="rrtstar.py" ns="main_robot" respawn="true" output="screen">
+    <rosparam file="$(find ak_eurobot_navigation)/config/motion_planner_main_robot_params.yaml" command="load" />
+  </node>
+  <node name="motion_planner" pkg="ak_eurobot_navigation" type="motion_planner.py" ns="main_robot" respawn="true" output="screen">
+    <rosparam file="$(find ak_eurobot_navigation)/config/motion_planner_main_robot_params.yaml" command="load" />
   </node>
 
 </launch>
