@@ -244,38 +244,20 @@ class RRTStar:
 
         mult = .5 * step / self.STEP_MAX
 
-        extra_check = False
-        if start_path_width > .15:
-            extra_check = True
-
-        if abs(theta) < np.pi/2:
-            bound0 = ((nearest_node.x, nearest_node.y), (new_node.x, new_node.y))
-            bound1 = ((nearest_node.x + dx_start - dy_start*mult, nearest_node.y - dy_start - dx_start*mult), (new_node.x + dx_end + dy_end*mult, new_node.y - dy_end + dx_end*mult))
-            bound2 = ((nearest_node.x - dx_start - dy_start*mult, nearest_node.y + dy_start - dx_start*mult), (new_node.x - dx_end + dy_end*mult, new_node.y + dy_end + dx_end*mult))
-            if extra_check:
-                dx_start *= .5
-                dy_start *= .5
-                dx_end *= .5
-                dy_end *= .5
-                bound3 = ((nearest_node.x + dx_start - dy_start*mult, nearest_node.y - dy_start - dx_start*mult), (new_node.x + dx_end + dy_end*mult, new_node.y - dy_end + dx_end*mult))
-                bound4 = ((nearest_node.x - dx_start - dy_start*mult, nearest_node.y + dy_start - dx_start*mult), (new_node.x - dx_end + dy_end*mult, new_node.y + dy_end + dx_end*mult))
-        else:
-            bound0 = ((new_node.x, new_node.y), (nearest_node.x, nearest_node.y))
-            bound1 = ((new_node.x + dx_end + dy_end*mult, new_node.y - dy_end + dx_end*mult), (nearest_node.x + dx_start - dy_start*mult, nearest_node.y - dy_start - dx_start*mult))
-            bound2 = ((new_node.x - dx_end + dy_end*mult, new_node.y + dy_end + dx_end*mult), (nearest_node.x - dx_start - dy_start*mult, nearest_node.y + dy_start - dx_start*mult))
-            if extra_check:
-                dx_start *= .5
-                dy_start *= .5
-                dx_end *= .5
-                dy_end *= .5
-                bound3 = ((new_node.x + dx_end + dy_end*mult, new_node.y - dy_end + dx_end*mult), (nearest_node.x + dx_start - dy_start*mult, nearest_node.y - dy_start - dx_start*mult))
-                bound4 = ((new_node.x - dx_end + dy_end*mult, new_node.y + dy_end + dx_end*mult), (nearest_node.x - dx_start - dy_start*mult, nearest_node.y + dy_start - dx_start*mult))
-
-        if extra_check:
-            if self.line_collision(bound0, plot) or self.line_collision(bound1, plot) or self.line_collision(bound2, plot) or self.line_collision(bound3, plot) or self.line_collision(bound4, plot):
-                return False
-        elif self.line_collision(bound0, plot) or self.line_collision(bound1, plot) or self.line_collision(bound2, plot):
+        bound0 = ((nearest_node.x, nearest_node.y), (new_node.x, new_node.y))
+        bound1 = ((nearest_node.x + dx_start - dy_start*mult, nearest_node.y - dy_start - dx_start*mult), (new_node.x + dx_end + dy_end*mult, new_node.y - dy_end + dx_end*mult))
+        bound2 = ((nearest_node.x - dx_start - dy_start*mult, nearest_node.y + dy_start - dx_start*mult), (new_node.x - dx_end + dy_end*mult, new_node.y + dy_end + dx_end*mult))
+        if self.line_collision(bound0, plot) or self.line_collision(bound1, plot) or self.line_collision(bound2, plot):
             return False
+        if start_path_width > .15:
+            dx_start *= .5
+            dy_start *= .5
+            dx_end *= .5
+            dy_end *= .5
+            bound3 = ((nearest_node.x + dx_start - dy_start*mult, nearest_node.y - dy_start - dx_start*mult), (new_node.x + dx_end + dy_end*mult, new_node.y - dy_end + dx_end*mult))
+            bound4 = ((nearest_node.x - dx_start - dy_start*mult, nearest_node.y + dy_start - dx_start*mult), (new_node.x - dx_end + dy_end*mult, new_node.y + dy_end + dx_end*mult))
+            if self.line_collision(bound3, plot) or self.line_collision(bound4, plot):
+                return False
         return True
 
     def line_collision(self, line, plot=False):
@@ -283,25 +265,25 @@ class RRTStar:
 
         # discretize values of x and y along line according to map using Bresemham's alg
         if abs(line[1][0] - line[0][0]) > abs(line[1][1] - line[0][1]):
-
-            x_ind = np.arange(np.ceil((line[0][0]) / self.resolution),
-                              np.ceil((line[1][0]) / self.resolution + 1), 5, dtype=int)
-            y_ind = []
-
-            dx = max(1, np.ceil(line[1][0] / self.resolution) - np.ceil(line[0][0] / self.resolution))
+            dx = np.ceil(line[1][0] / self.resolution) - np.ceil(line[0][0] / self.resolution)
+            sign = np.sign(dx) if dx != 0.0 else 1
+            dx = sign*max(1, abs(dx))
             dy = np.ceil(line[1][1] / self.resolution) - np.ceil(line[0][1] / self.resolution)
             deltaerr = abs(dy / dx)
             error = .0
 
+            x_ind = np.arange(np.ceil((line[0][0]) / self.resolution),
+                              np.ceil((line[1][0]) / self.resolution + sign * 1), sign * 5, dtype=int)
+            y_ind = np.zeros(x_ind.shape[0])
+
             y = int(np.ceil((line[0][1]) / self.resolution))
-            for _ in x_ind:
-                y_ind.append(y)
+            for i in xrange(x_ind.shape[0]):
+                y_ind[i] = y
                 error = error + 5*deltaerr
                 while error >= 0.5:
                     y += np.sign(dy) * 1
                     error -= 1
-
-            y_ind = np.array(y_ind)
+            # y_ind = np.array(y_ind)
             # check if any cell along the line contains an obstacle
             for i in range(len(x_ind)):
                 row = min([int(-self.y0 / self.resolution + y_ind[i]), self.shape_map[1] - 1])
@@ -326,7 +308,6 @@ class RRTStar:
             return False
 
         else:
-
             dy = np.ceil(line[1][1] / self.resolution) - np.ceil(line[0][1] / self.resolution)
             sign = np.sign(dy) if dy != 0.0 else 1
             dy = sign*max(1, abs(dy))
@@ -336,17 +317,16 @@ class RRTStar:
 
             y_ind = np.arange(np.ceil((line[0][1]) / self.resolution),
                               np.ceil((line[1][1]) / self.resolution + sign * 1), sign * 5, dtype=int)
-            x_ind = []
+            x_ind = np.zeros(y_ind.shape[0])
 
             x = int(np.ceil((line[0][0]) / self.resolution))
-            for _ in y_ind:
-                x_ind.append(x)
+            for i in xrange(y_ind.shape[0]):
+                x_ind[i] = x
                 error = error + 5 * deltaerr
                 while error >= 0.5:
                     x += np.sign(dx) * 1
                     error -= 1
-
-            x_ind = np.array(x_ind)
+            # x_ind = np.array(x_ind)
             # check if any cell along the line contains an obstacle
             for i in range(len(y_ind)):
                 row = min([int(-self.y0 / self.resolution + y_ind[i]), self.shape_map[1] - 1])
