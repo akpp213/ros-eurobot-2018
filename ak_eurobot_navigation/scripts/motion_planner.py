@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 import rospy
 import numpy as np
-import pandas as pd
+# import pandas as pd
 import tf2_ros
 import tf
 from tf.transformations import euler_from_quaternion
@@ -409,7 +409,8 @@ class MotionPlanner:
             self.path = None
         else:
             self.path_found = True
-            self.path = np.array(pd.unique(pnts).tolist())
+            # self.path = np.array(pd.unique(pnts).tolist())
+            self.path = np.array(pnts)
 
     def update_path(self):
         self.disable_circle = True
@@ -460,7 +461,15 @@ class MotionPlanner:
         if circle is None:
             self.time_since_last_circle = self.CIRCLE_REPLAN_RATE
         else:
-            self.path = np.array(pd.unique(np.concatenate((self.path[:min(first_ind, second_ind)], circle, self.path[second_ind:]))).tolist())
+            # self.path = np.array(pd.unique(np.concatenate((self.path[:min(first_ind, second_ind)], circle, self.path[second_ind:]))).tolist())
+            self.path = np.concatenate((self.path[:first_ind], circle, self.path[second_ind:]))
+            if self.path[first_ind - 1] == self.path[first_ind] and self.path[second_ind - 1] == self.path[second_ind]:
+                self.path = np.delete(self.path, [first_ind, second_ind], 0)
+            elif self.path[first_ind - 1] == self.path[first_ind]:
+                self.path = np.delete(self.path, first_ind, 0)
+            elif self.path[second_ind - 1] == self.path[second_ind]:
+                self.path = np.delete(self.path, second_ind, 0)
+                
             print circle
             self.visualize_path()
 
