@@ -1,6 +1,6 @@
 # max rate of the planner
 RATE: 25
-REPLAN_RATE: 100
+REPLAN_RATE: 1000
 # goal tolerance
 XY_GOAL_TOLERANCE: 0.02
 YAW_GOAL_TOLERANCE: 0.1
