@@ -3,6 +3,7 @@ import rospy
 import numpy as np
 # import pandas as pd
 import tf2_ros
+import tf
 from tf.transformations import euler_from_quaternion
 from geometry_msgs.msg import Twist, Point, Polygon
 from visualization_msgs.msg import Marker
@@ -26,6 +27,7 @@ class MotionPlanner:
 
         self.tfBuffer = tf2_ros.Buffer()
         self.tfListener = tf2_ros.TransformListener(self.tfBuffer)
+        self.listener = tf.TransformListener()
 
         self.robot_name = rospy.get_param("robot_name")
         self.team_color = rospy.get_param("/field/color")
@@ -60,7 +62,8 @@ class MotionPlanner:
         # for pure pursuit path following
         self.LOOKAHEAD = rospy.get_param("motion_planner/LOOKAHEAD")  # 0.25
         self.STEP = rospy.get_param("motion_planner/STEP")
-        self.DESIRED_DIRECS = rospy.get_param("motion_planner/DESIRED_DIRECTIONS_OF_TRAVEL")
+        self.DESIRED_DIRECS = np.array(rospy.get_param("motion_planner/DESIRED_DIRECTIONS_OF_TRAVEL"))
+        self.desired_direction = 0.0
         self.look = self.LOOKAHEAD
 
         self.LIDAR_C_A = rospy.get_param("motion_planner/LIDAR_COLLISION_STOP_DISTANCE")
@@ -152,7 +155,7 @@ class MotionPlanner:
         rospy.Subscriber("/map_server/opponent_robots", PointCloud, self.detected_robots_callback, queue_size=1)
         rospy.Subscriber("rrt_path", Polygon, self.rrt_found, queue_size=1)
         rospy.Subscriber("scan", LaserScan, self.scan_callback, queue_size=5)
-        rospy.Subscriber("no_path_found", Bool, self.no_path, queue_size=1)
+        rospy.Subscriber("/"+self.other_robot_name+"/no_path_found", Bool, self.no_path, queue_size=1)
         rospy.Subscriber("/main_robot/map", OccupancyGrid, self.update_map, queue_size=3)
         rospy.Subscriber("/secondary_robot/map", OccupancyGrid, self.update_map, queue_size=3)
         # start the main timer that will follow given goal points
@@ -190,6 +193,7 @@ class MotionPlanner:
             self.mutex.release()
             return
 
+        # print self.desired_direction, "desired direction of travel"
         # current linear and angular goal distance
         goal_distance = np.zeros(3)
         goal_distance = self.distance(self.coords, self.goal)
@@ -223,10 +227,11 @@ class MotionPlanner:
 
             active_rangefinders, stop_ranges = self.choose_active_rangefinders()
 
-            a, b, c = active_rangefinders == 0, active_rangefinders == 2, active_rangefinders == 6
-            stop_ranges[a] += 50
-            stop_ranges[b] += 25
-            stop_ranges[c] += 25
+            if self.robot_name == "secondary_robot":
+                a, b, c = active_rangefinders == 0, active_rangefinders == 2, active_rangefinders == 6
+                stop_ranges[a] += 50
+                stop_ranges[b] += 25
+                stop_ranges[c] += 25
 
             t = rospy.get_time()
             dt = t - self.t_prev
@@ -249,7 +254,7 @@ class MotionPlanner:
                             speed_limit_collision.append(min(self.distance_to_closest_robot() * self.COLLISION_AVOIDANCE_COEFFICIENT, ((self.rangefinder_data[active_rangefinders[i]] - stop_ranges[i]) / (255.0 - stop_ranges[i])) ** self.COLLISION_GAMMA * self.V_MAX))
                     else:
                         speed_limit_collision.append(self.distance_to_closest_robot() * self.COLLISION_AVOIDANCE_COEFFICIENT)
-                rospy.loginfo('Collision Avoidance  Speed Limit:\t' + str(speed_limit_collision))
+                # rospy.loginfo('Collision Avoidance  Speed Limit:\t' + str(speed_limit_collision))
             else:
                 speed_limit_collision = [self.V_MAX]
             # speed_limit_collision = [self.V_MAX]
@@ -271,8 +276,8 @@ class MotionPlanner:
                 vel = self.follow_path()
                 vel[0] *= goal_d*3
                 vel[1] *= goal_d*3
-                # vel[2] = self.find_rot(np.arctan2(vel[1], vel[0]))
-                vel[2] = self.W_MAX * goal_distance[2] / goal_d
+                vel[2] = -self.W_MAX * self.find_rot(np.arctan2(vel[1], vel[0])) * 3
+                # vel[2] = self.W_MAX * goal_distance[2] / goal_d
                 if np.linalg.norm(vel[:2]) < self.V_MAX/2:
                 # if abs(vel[0]) < .05 and abs(vel[1] < .05):
                     vel = None
@@ -399,9 +404,13 @@ class MotionPlanner:
             self.avoid_direc = None
 
     def rrt_found(self, msg):
-        self.path_found = True
-        # self.path = np.array(pd.unique(self.poly_to_list(msg.points)).tolist())
-        self.path = np.array(self.poly_to_list(msg.points))
+        pnts = self.poly_to_list(msg.points)
+        if not len(pnts):
+            self.path = None
+        else:
+            self.path_found = True
+            # self.path = np.array(pd.unique(pnts).tolist())
+            self.path = np.array(pnts)
 
     def update_path(self):
         self.disable_circle = True
@@ -453,7 +462,15 @@ class MotionPlanner:
             self.time_since_last_circle = self.CIRCLE_REPLAN_RATE
         else:
             # self.path = np.array(pd.unique(np.concatenate((self.path[:min(first_ind, second_ind)], circle, self.path[second_ind:]))).tolist())
-            self.path = np.concatenate((self.path[:min(first_ind, second_ind)], circle, self.path[second_ind:]))
+
+            self.path = np.concatenate((self.path[:first_ind], circle, self.path[second_ind:]))
+            if self.path[first_ind - 1] == self.path[first_ind] and self.path[second_ind - 1] == self.path[second_ind]:
+                self.path = np.delete(self.path, [first_ind, second_ind], 0)
+            elif self.path[first_ind - 1] == self.path[first_ind]:
+                self.path = np.delete(self.path, first_ind, 0)
+            elif self.path[second_ind - 1] == self.path[second_ind]:
+                self.path = np.delete(self.path, second_ind, 0)
+
             print circle
             self.visualize_path()
 
@@ -573,21 +590,36 @@ class MotionPlanner:
     @staticmethod
     def poly_to_list(points):
         if points == []:
-            return None
+            return []
         pnts = []
         for pt in points:
             pnts.append((pt.x, pt.y))
         return np.array(pnts)
 
     def no_path(self, msg):
-        if msg:
-            self.path = None
+        self.path = []
+        print "++++++++++++++++++++++++++++++++++++++++++++++++++++"
+        print "OTHER ROBOT STUCK. PLANNING NEW PATH"
+        print "++++++++++++++++++++++++++++++++++++++++++++++++++++"
+        goal = Point()
+        goal.x = self.goal[0]
+        goal.y = self.goal[1]
+        goal.z = self.goal[2]
+        start = Point()
+        start.x = self.coords[0]
+        start.y = self.coords[1]
+        start.z = self.coords[2]
+        self.pub_current_coords.publish(start)
+        self.path_plan_pub.publish(goal)
 
     def find_rot(self, travel):
-        desired_direction = self.DESIRED_DIRECS[np.abs(self.goal[2] - self.DESIRED_DIRECS).argmin()]
-        desired_direction = self.DESIRED_DIRECS[np.abs(travel - self.DESIRED_DIRECS).argmin()]
-        return desired_direction - travel
-        return (desired_direction - travel + np.pi) % (2*np.pi) - np.pi
+        # desired_direction = self.DESIRED_DIRECS[np.abs(self.goal[2] - self.DESIRED_DIRECS).argmin()]
+        # desired_direction = self.DESIRED_DIRECS[np.abs(travel - self.DESIRED_DIRECS).argmin()]
+        # desired_direction = self.DESIRED_DIRECS[np.abs((self.DESIRED_DIRECS - travel + np.pi) % (2*np.pi) - np.pi).argmin()]
+        # return desired_direction - travel
+        turn_rate = (self.desired_direction - travel + np.pi) % (2*np.pi) - np.pi
+        # print turn_rate, "tr"
+        return turn_rate
 
     def follow_path(self):
         if self.path is not None and self.path != []:
@@ -836,6 +868,11 @@ class MotionPlanner:
         self.rangefinder_data = np.zeros(self.NUM_RANGEFINDERS)
         self.rangefinder_status = np.zeros(self.NUM_RANGEFINDERS)
         self.active_rangefinder_zones = np.ones(3, dtype="int")
+        # p = Point()
+        # p.x = -1
+        # p.y = -1
+        # p.z = -1
+        # self.path_plan_pub.publish(p)
 
     def stop_robot(self):
         self.cmd_stop_robot_id = "stop_" + self.robot_name + str(self.stop_id)
@@ -862,6 +899,13 @@ class MotionPlanner:
         rospy.loginfo("Active Rangefinder Zones: " + str(active_rangefinder_zones))
         self.t_prev = rospy.get_time()
         self.goal = goal
+
+        goal_delta_angle = np.arctan2(self.goal[1] - self.coords[1], self.goal[0] - self.coords[0]) - self.goal[2]
+        print goal_delta_angle, "gda"
+        self.desired_direction = self.DESIRED_DIRECS[
+            np.abs((self.DESIRED_DIRECS - goal_delta_angle + np.pi) % (2 * np.pi) - np.pi).argmin()]
+        print self.desired_direction, "DESIRED DIRECTION OF TRAVEL"
+
         goal = Point()
         goal.x = self.goal[0]
         goal.y = self.goal[1]
@@ -1023,21 +1067,33 @@ class MotionPlanner:
 
     def update_coords(self):
         try:
-            trans = self.tfBuffer.lookup_transform('map', self.other_robot_name, rospy.Time())
-            q = [trans.transform.rotation.x, trans.transform.rotation.y, trans.transform.rotation.z, trans.transform.rotation.w]
-            angle = euler_from_quaternion(q)[2] % (2 * np.pi)
-            self.other_robot_coords = np.array([trans.transform.translation.x, trans.transform.translation.y, angle])
-        except (tf2_ros.LookupException, tf2_ros.ConnectivityException, tf2_ros.ExtrapolationException):
+            # trans = self.tfBuffer.lookup_transform('map', self.other_robot_name, rospy.Time())
+            # q = [trans.transform.rotation.x, trans.transform.rotation.y, trans.transform.rotation.z, trans.transform.rotation.w]
+            # angle = euler_from_quaternion(q)[2] % (2 * np.pi)
+            # self.other_robot_coords = np.array([trans.transform.translation.x, trans.transform.translation.y, angle])
+
+            (trans, rot) = self.listener.lookupTransform('/map', '/'+self.other_robot_name, rospy.Time(0))
+            yaw = tf.transformations.euler_from_quaternion(rot)[2]
+            self.other_robot_coords = np.array([trans[0], trans[1], yaw])
+
+        # except (tf2_ros.LookupException, tf2_ros.ConnectivityException, tf2_ros.ExtrapolationException):
+        except (tf.LookupException, tf.ConnectivityException, tf.ExtrapolationException):
             # rospy.loginfo("MotionPlanner failed to find other robot's coordinates.")
             pass
         try:
-            trans = self.tfBuffer.lookup_transform('map', self.robot_name, rospy.Time())
-            q = [trans.transform.rotation.x, trans.transform.rotation.y, trans.transform.rotation.z, trans.transform.rotation.w]
-            angle = euler_from_quaternion(q)[2] % (2 * np.pi)
-            self.coords = np.array([trans.transform.translation.x, trans.transform.translation.y, angle])
-            # rospy.loginfo("Robot coords:\t" + str(self.coords))
+            # trans = self.tfBuffer.lookup_transform('map', self.robot_name, rospy.Time())
+            # q = [trans.transform.rotation.x, trans.transform.rotation.y, trans.transform.rotation.z, trans.transform.rotation.w]
+            # angle = euler_from_quaternion(q)[2] % (2 * np.pi)
+            # self.coords = np.array([trans.transform.translation.x, trans.transform.translation.y, angle])
+            # # rospy.loginfo("Robot coords:\t" + str(self.coords))
+
+            (trans, rot) = self.listener.lookupTransform('/map', '/' + self.robot_name, rospy.Time(0))
+            yaw = tf.transformations.euler_from_quaternion(rot)[2]
+            self.coords = np.array([trans[0], trans[1], yaw])
+
             return True
-        except (tf2_ros.LookupException, tf2_ros.ConnectivityException, tf2_ros.ExtrapolationException):
+        # except (tf2_ros.LookupException, tf2_ros.ConnectivityException, tf2_ros.ExtrapolationException):
+        except (tf.LookupException, tf.ConnectivityException, tf.ExtrapolationException):
             rospy.loginfo("MotionPlanner failed to lookup tf2.")
             return False
 

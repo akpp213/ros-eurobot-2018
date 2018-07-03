@@ -8,7 +8,6 @@ Panels:
         - /TF1/Tree1
         - /Marker1
         - /Marker2
-        - /Marker3
       Splitter Ratio: 0.592190862
     Tree Height: 1142
   - Class: rviz/Selection
@@ -86,26 +85,13 @@ Visualization Manager:
       Frame Timeout: 15
       Frames:
         All Enabled: false
-        map:
-          Value: true
-        secondary_robot:
-          Value: true
-        secondary_robot_laser:
-          Value: true
-        secondary_robot_odom:
-          Value: true
       Marker Scale: 0.400000006
       Name: TF
       Show Arrows: true
       Show Axes: true
       Show Names: true
       Tree:
-        secondary_robot_odom:
-          map:
-            {}
-          secondary_robot:
-            secondary_robot_laser:
-              {}
+        {}
       Update Interval: 0
       Value: true
     - Attached Body Color: 150; 50; 150
@@ -505,7 +491,7 @@ Visualization Manager:
       Marker Topic: /secondary_robot/visualization_msgs/Marker
       Name: Marker
       Namespaces:
-        "": true
+        {}
       Queue Size: 100
       Value: true
     - Class: rviz/Marker
@@ -518,10 +504,10 @@ Visualization Manager:
       Value: true
     - Class: rviz/Marker
       Enabled: true
-      Marker Topic: /secondary_robot/2/visualization_msgs/Marker
+      Marker Topic: /main_robot/visualization_msgs/Marker
       Name: Marker
       Namespaces:
-        "": true
+        {}
       Queue Size: 100
       Value: true
   Enabled: true

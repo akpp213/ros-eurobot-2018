@@ -7,10 +7,10 @@ from nav_msgs.msg import Odometry
 from geometry_msgs.msg import Twist
 
 
-class stm_node():
+class stm_node_secondary():
     def __init__(self):
         # ROS
-        rospy.init_node('stm_node', anonymous=True)
+        rospy.init_node('stm_node_secondary', anonymous=True)
         rospy.Subscriber("stm_command", String, self.stm_command_callback)
         rospy.Subscriber("cmd_vel", Twist, self.set_twist)
         self.pub_response = rospy.Publisher("response", String, queue_size=10)
@@ -199,14 +199,14 @@ class stm_node():
         self.br.sendTransform((0, 0, 0),
                               tf.transformations.quaternion_from_euler(0, 0, 0),
                               rospy.Time.now(),
-                              "%s_odom" % self.robot_name,
-                              'map')
+                              'map',
+                              "%s_odom" % self.robot_name)
 
 
 
 if __name__ == '__main__':
     try:
-        stm = stm_node()
+        stm = stm_node_secondary()
 
         stm.integrate()
     except rospy.ROSInterruptException:

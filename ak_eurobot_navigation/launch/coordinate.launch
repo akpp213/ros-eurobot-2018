@@ -1,12 +1,13 @@
 <?xml version="1.0"?>
 <launch>
 
-  <node name="rrtstar" pkg="ak_eurobot_navigation" type="rrtstar.py" ns="secondary_robot" respawn="true" output="screen">
+  <node name="coordinated_motion_planner" pkg="ak_eurobot_navigation" type="coordinated_motion_planner.py" ns="secondary_robot" respawn="true" output="screen">
     <rosparam file="$(find ak_eurobot_navigation)/config/motion_planner_secondary_robot_params.yaml" command="load" />
+    <param name="TIME_RESOLUTION" value="5"/>
   </node>
+
   <node name="motion_planner" pkg="ak_eurobot_navigation" type="motion_planner.py" ns="secondary_robot" respawn="true" output="screen">
     <rosparam file="$(find ak_eurobot_navigation)/config/motion_planner_secondary_robot_params.yaml" command="load" />
   </node>
-  <node name="map_server" pkg="ak_eurobot_navigation" type="map_server.py" ns="secondary_robot" respawn="true" output="screen"/>
 
 </launch>

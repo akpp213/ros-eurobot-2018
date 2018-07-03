@@ -9,7 +9,7 @@
 
   <group ns="secondary_robot">
     <!-- NODES -->
-    <node pkg="eurobot_sim" name="stm_node" type="stm_node.py" respawn="true"/>
+    <node pkg="eurobot_sim" name="stm_node" type="stm_node.py" respawn="true" output="screen"/>
   </group>
 
 </launch>
