@@ -464,11 +464,11 @@ class MotionPlanner:
             # self.path = np.array(pd.unique(np.concatenate((self.path[:min(first_ind, second_ind)], circle, self.path[second_ind:]))).tolist())
 
             self.path = np.concatenate((self.path[:first_ind], circle, self.path[second_ind:]))
-            if self.path[first_ind - 1] == self.path[first_ind] and self.path[second_ind - 1] == self.path[second_ind]:
+            if np.all(self.path[first_ind - 1] == self.path[first_ind] and self.path[second_ind - 1] == self.path[second_ind]):
                 self.path = np.delete(self.path, [first_ind, second_ind], 0)
-            elif self.path[first_ind - 1] == self.path[first_ind]:
+            elif np.all(self.path[first_ind - 1] == self.path[first_ind]):
                 self.path = np.delete(self.path, first_ind, 0)
-            elif self.path[second_ind - 1] == self.path[second_ind]:
+            elif np.all(self.path[second_ind - 1] == self.path[second_ind]):
                 self.path = np.delete(self.path, second_ind, 0)
 
             print circle
