@@ -322,7 +322,7 @@ class MotionPlanner:
             # self.look += .1
             print "INCREASING LIDAR DIST TO: ", self.lidar_dist, "AND LOOKAHEAD DIST TO: ", self.look
 
-            if self.time_since_last_circle >= self.CIRCLE_REPLAN_RATE and self.path != [] and self.fourth_closest < 500:
+            if self.time_since_last_circle >= self.CIRCLE_REPLAN_RATE and self.path != []:# and self.fourth_closest < 500:
                 self.need_to_make_circle = True
 
         elif not self.avoid_direc:
@@ -462,6 +462,7 @@ class MotionPlanner:
             self.time_since_last_circle = self.CIRCLE_REPLAN_RATE
         else:
             # self.path = np.array(pd.unique(np.concatenate((self.path[:min(first_ind, second_ind)], circle, self.path[second_ind:]))).tolist())
+
             self.path = np.concatenate((self.path[:first_ind], circle, self.path[second_ind:]))
             if self.path[first_ind - 1] == self.path[first_ind] and self.path[second_ind - 1] == self.path[second_ind]:
                 self.path = np.delete(self.path, [first_ind, second_ind], 0)
@@ -469,7 +470,7 @@ class MotionPlanner:
                 self.path = np.delete(self.path, first_ind, 0)
             elif self.path[second_ind - 1] == self.path[second_ind]:
                 self.path = np.delete(self.path, second_ind, 0)
-                
+
             print circle
             self.visualize_path()
 
@@ -675,7 +676,7 @@ class MotionPlanner:
         # Finds the closest line segment to the bot from anywhere along the trajectory
 
         x, y = pos
-        mps = ([x, y])*np.ones((self.path.shape[0]-1, 2))
+        mps = ([x, y])*np.ones((len(self.path)-1, 2))
 
         # finds the closest point to the robot in each line segment
         min_dists = self.find_min_dist(self.path[:-1], self.path[1:], mps)

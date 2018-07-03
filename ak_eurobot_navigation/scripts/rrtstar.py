@@ -6,9 +6,10 @@ from visualization_msgs.msg import Marker
 from std_msgs.msg import Bool
 from sensor_msgs.msg import PointCloud
 import numpy as np
-import pandas as pd
+# import pandas as pd
 from threading import Lock
-import matplotlib.pyplot as plt
+# import matplotlib.pyplot as plt
+
 
 
 class Node(object):
@@ -51,6 +52,7 @@ class RRTStar:
         # self.nodes_secondary = None
         self.path = []
         self.turn_angle = None
+        self.find_bezier = False
 
         self.x0 = -0.2
         self.y0 = -0.2
@@ -210,8 +212,9 @@ class RRTStar:
                         if last_idx is None:
                             self.mutex.release()
                             return
-                        path = self.get_path(last_idx)
-                        self.path = pd.unique(np.array(path))
+                        # path = self.get_path(last_idx)
+                        # self.path = pd.unique(np.array(path))
+                        self.path = self.get_path(last_idx)
                         print self.path, "path"
                         self.new_path.publish(self.to_poly(self.path))
                         self.visualize()
@@ -511,7 +514,8 @@ class RRTStar:
             node = self.nodes[last_idx]
             path.append((node.x, node.y))
             last_idx = node.parent
-        path.append((self.coords[0], self.coords[1]))
+        if (self.coords[0], self.coords[1]) not in path:
+            path.append((self.coords[0], self.coords[1]))
         path.reverse()
         path = np.array(path)
         if self.find_bezier:
