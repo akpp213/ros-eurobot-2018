@@ -6,7 +6,7 @@ from visualization_msgs.msg import Marker
 from std_msgs.msg import Bool
 from sensor_msgs.msg import PointCloud
 import numpy as np
-import pandas as pd
+# import pandas as pd
 # import matplotlib.pyplot as plt
 
 
@@ -38,6 +38,7 @@ class RRTStar:
         # self.nodes_secondary = None
         self.path = []
         self.turn_angle = None
+        self.find_bezier = False
 
         self.x0 = -0.2
         self.y0 = -0.2
@@ -164,8 +165,9 @@ class RRTStar:
                     last_idx = self.get_last_idx()
                     if last_idx is None:
                         return
-                    path = self.get_path(last_idx)
-                    self.path = pd.unique(np.array(path))
+                    # path = self.get_path(last_idx)
+                    # self.path = pd.unique(np.array(path))
+                    self.path = self.get_path(last_idx)
                     print self.path, "path"
                     self.new_path.publish(self.to_poly(self.path))
                     self.visualize()
@@ -348,34 +350,37 @@ class RRTStar:
         path = [(self.goal[0], self.goal[1])]
         while self.nodes[last_idx].parent is not None and (self.nodes[last_idx].x, self.nodes[last_idx].y) not in path:
             node = self.nodes[last_idx]
-            path.append((node.x, node.y))
+            if (node.x, node.y) not in path:
+                path.append((node.x, node.y))
             last_idx = node.parent
-        path.append((self.coords[0], self.coords[1]))
+        if (self.coords[0], self.coords[1]) not in path:
+            path.append((self.coords[0], self.coords[1]))
         path.reverse()
         path = np.array(path)
-        self.visualize(2)
-        result = self.bezier_path(path[0], path[path.shape[0]/2], path[-1])
-        interval = int(np.ceil(path.shape[0]/2.0))-1
-        while result is None and interval > 2:
-            print interval, "interval"
-            for i in xrange(0, path.shape[0] - interval, interval):
-                inter = interval
-                if i+inter >= path.shape[0] - interval:
-                    inter = path.shape[0] - i - 1
-                new_result = self.bezier_path(path[i], path[(i+inter)/2], path[i+inter])
-                if new_result is None:
-                    result = None
-                    interval /= 2
-                    break
-                else:
-                    # print new_result, "new result"
-                    if i == 0:
-                        result = new_result
+        if self.find_bezier:
+            # self.visualize(2)
+            result = self.bezier_path(path[0], path[path.shape[0]/2], path[-1])
+            interval = int(np.ceil(path.shape[0]/2.0))-1
+            while result is None and interval > 2:
+                print interval, "interval"
+                for i in xrange(0, path.shape[0] - interval, interval):
+                    inter = interval
+                    if i+inter >= path.shape[0] - interval:
+                        inter = path.shape[0] - i - 1
+                    new_result = self.bezier_path(path[i], path[(i+inter)/2], path[i+inter])
+                    if new_result is None:
+                        result = None
+                        interval /= 2
+                        break
                     else:
-                        result = np.concatenate((result[:i], new_result))
-        if result is not None:
-            return result
-        print "No Bezier Path Found"
+                        # print new_result, "new result"
+                        if i == 0:
+                            result = new_result
+                        else:
+                            result = np.concatenate((result[:i], new_result))
+            if result is not None:
+                return result
+            print "No Bezier Path Found"
         return path
 
     def bezier_path(self, P0, P1, P2):

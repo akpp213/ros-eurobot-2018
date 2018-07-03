@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 import rospy
 import numpy as np
-import pandas as pd
+# import pandas as pd
 import tf2_ros
 from tf.transformations import euler_from_quaternion
 from geometry_msgs.msg import Twist, Point, Polygon
@@ -317,7 +317,7 @@ class MotionPlanner:
             # self.look += .1
             print "INCREASING LIDAR DIST TO: ", self.lidar_dist, "AND LOOKAHEAD DIST TO: ", self.look
 
-            if self.time_since_last_circle >= self.CIRCLE_REPLAN_RATE and self.path != [] and self.fourth_closest < 500:
+            if self.time_since_last_circle >= self.CIRCLE_REPLAN_RATE and self.path != []:# and self.fourth_closest < 500:
                 self.need_to_make_circle = True
 
         elif not self.avoid_direc:
@@ -400,7 +400,8 @@ class MotionPlanner:
 
     def rrt_found(self, msg):
         self.path_found = True
-        self.path = np.array(pd.unique(self.poly_to_list(msg.points)).tolist())
+        # self.path = np.array(pd.unique(self.poly_to_list(msg.points)).tolist())
+        self.path = np.array(self.poly_to_list(msg.points))
 
     def update_path(self):
         self.disable_circle = True
@@ -451,7 +452,8 @@ class MotionPlanner:
         if circle is None:
             self.time_since_last_circle = self.CIRCLE_REPLAN_RATE
         else:
-            self.path = np.array(pd.unique(np.concatenate((self.path[:min(first_ind, second_ind)], circle, self.path[second_ind:]))).tolist())
+            # self.path = np.array(pd.unique(np.concatenate((self.path[:min(first_ind, second_ind)], circle, self.path[second_ind:]))).tolist())
+            self.path = np.concatenate((self.path[:min(first_ind, second_ind)], circle, self.path[second_ind:]))
             print circle
             self.visualize_path()
 
@@ -642,7 +644,7 @@ class MotionPlanner:
         # Finds the closest line segment to the bot from anywhere along the trajectory
 
         x, y = pos
-        mps = ([x, y])*np.ones((self.path.shape[0]-1, 2))
+        mps = ([x, y])*np.ones((len(self.path)-1, 2))
 
         # finds the closest point to the robot in each line segment
         min_dists = self.find_min_dist(self.path[:-1], self.path[1:], mps)
