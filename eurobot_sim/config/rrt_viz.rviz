@@ -6,8 +6,6 @@ Panels:
       Expanded:
         - /TF1/Frames1
         - /TF1/Tree1
-        - /Marker1
-        - /Marker2
       Splitter Ratio: 0.592190862
     Tree Height: 1142
   - Class: rviz/Selection
@@ -510,6 +508,29 @@ Visualization Manager:
         {}
       Queue Size: 100
       Value: true
+    - Attached Body Color: 150; 50; 150
+      Class: moveit_rviz_plugin/RobotState
+      Collision Enabled: false
+      Enabled: true
+      Links:
+        All Links Enabled: true
+        Expand Joint Details: false
+        Expand Link Details: false
+        Expand Tree: false
+        Link Tree Style: Links in Alphabetic Order
+        opponent_robot:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+          Value: true
+      Name: OpponentRobot
+      Robot Alpha: 1
+      Robot Description: opponent_robot/description
+      Robot State Topic: display_robot_state
+      Show All Links: true
+      Show Highlights: true
+      Value: true
+      Visual Enabled: true
   Enabled: true
   Global Options:
     Background Color: 48; 48; 48
@@ -535,7 +556,7 @@ Visualization Manager:
   Views:
     Current:
       Class: rviz/Orbit
-      Distance: 4.56281805
+      Distance: 6.41043091
       Enable Stereo Rendering:
         Stereo Eye Separation: 0.0599999987
         Stereo Focal Distance: 1
@@ -550,10 +571,10 @@ Visualization Manager:
       Invert Z Axis: false
       Name: Current View
       Near Clip Distance: 0.00999999978
-      Pitch: 1.56979632
+      Pitch: 0.779796422
       Target Frame: <Fixed Frame>
       Value: Orbit (rviz)
-      Yaw: 6.26448488
+      Yaw: 0.121292792
     Saved: ~
 Window Geometry:
   Displays:

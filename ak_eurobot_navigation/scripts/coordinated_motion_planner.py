@@ -149,7 +149,7 @@ class CoordinatedMotionPlanner:
         else:
             print "NO PATH FOR OTHER ROBOT"
             self.other_path = np.array([self.other_coords[:2], self.other_goal[:2]])
-            res = int(np.linalg.norm(self.other_path[1] - self.other_path[0])/0.1)
+            res = max(1, int(np.linalg.norm(self.other_path[1] - self.other_path[0])/0.1))
 
         self.other_angles, self.other_times = self.calc_angle_and_time_progression()
         print "Found time, angle progressions"
@@ -270,7 +270,7 @@ class CoordinatedMotionPlanner:
             #     plt.subplot(2,3,j+1)
             #     plt.imshow(self.permissible_region[i*res + j])
             # plt.show()
-        # plt.pause(10)
+        # plt.show()
 
         print "TIME MAP FINISHED WITH SHAPE:", self.permissible_region.shape
 

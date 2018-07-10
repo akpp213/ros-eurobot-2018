@@ -1209,7 +1209,6 @@ class MotionPlanner:
         self.path_viz_pub.publish(line_strip)
 
 
-
 if __name__ == "__main__":
     planner = MotionPlanner()
 rospy.spin()

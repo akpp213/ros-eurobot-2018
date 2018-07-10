@@ -1,0 +1,8 @@
+<?xml version="1.0"?>
+<launch>
+
+  <node name="simple_motion_planner" pkg="ak_eurobot_navigation" type="simple_motion_planner.py" ns="opponent_robot" respawn="true" output="screen">
+    <rosparam file="$(find ak_eurobot_navigation)/config/motion_planner_opponent_robot_params.yaml" command="load" />
+  </node>
+
+</launch>

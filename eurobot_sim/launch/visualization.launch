@@ -23,6 +23,12 @@
     <param name="description_semantic" command="cat $(find eurobot_sim)/models/secondary_robot.urdf" />
   </group>
 
+  <group ns="opponent_robot">
+    <!-- Robot model -->
+    <param name="description" command="cat $(find eurobot_sim)/models/opponent_robot.urdf" />
+    <param name="description_semantic" command="cat $(find eurobot_sim)/models/opponent_robot.urdf" />
+  </group>
+
   <group ns="field">
   
     <node pkg="eurobot_sim" name="cubes_broadcaster" type="cubes_broadcaster.py"  output="screen"/>

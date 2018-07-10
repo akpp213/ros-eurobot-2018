@@ -8,8 +8,7 @@ from sensor_msgs.msg import PointCloud
 import numpy as np
 # import pandas as pd
 from threading import Lock
-# import matplotlib.pyplot as plt
-
+import matplotlib.pyplot as plt
 
 
 class Node(object):
@@ -53,6 +52,9 @@ class RRTStar:
         self.path = []
         self.turn_angle = None
         self.find_bezier = False
+
+        self.opponent_robots = None
+        self.robots_upd_time = None
 
         self.x0 = -0.2
         self.y0 = -0.2
@@ -107,8 +109,6 @@ class RRTStar:
             array255 = np.array(msg.data).reshape((msg.info.height, msg.info.width))
             self.permissible_region = np.ones_like(array255, dtype=bool)
             self.permissible_region[array255 == 100] = 0  # set occupied regions (100) to 0 and unoccupied regions to 1
-            # if self.robot_name == "main_robot":
-                # self.permissible_region[41:65, 24:30] = 0
             self.map_updated = True
             print "Map Updated"
             if self.goal is not None and (self.path is None or not len(self.path)):
@@ -140,7 +140,7 @@ class RRTStar:
         self.nodes = [start_node]
         j = 0
         path_found = False
-        #plt.axis([self.x0, self.x0 + self.map_width, self.y0 + self.map_height, self.y0])
+        # plt.axis([self.x0, self.x0 + self.map_width, self.y0 + self.map_height, self.y0])
         row = min([int(-self.y0 / self.resolution + self.goal[1]), self.shape_map[1] - 1])
         column = min([int(-self.x0 / self.resolution + self.goal[0]), self.shape_map[0] - 1])
         if self.permissible_region[row, column]:
@@ -151,7 +151,8 @@ class RRTStar:
                     # sample goal location every 10 iterations
                     rnd = [self.goal[0], self.goal[1]]
                 else:
-                    rnd = [self.x0 + self.map_width * np.random.uniform(), self.y0 + self.map_height * np.random.uniform()]
+                    rnd = [self.x0 + self.map_width * np.random.uniform(),
+                           self.y0 + self.map_height * np.random.uniform()]
 
                 # plt.plot(rnd[0], rnd[1], 'og')
                 # find the nearest node
@@ -163,7 +164,7 @@ class RRTStar:
                 step = max(min(dist/2, self.STEP_MAX), self.STEP_MIN)
 
                 # expand the tree
-                x_new, theta = self.steer_to_node(x_near, rnd, step)  # goes from x_near to x_new which points towards rnd
+                x_new, theta = self.steer_to_node(x_near, rnd, step)  # goes from x_near to x_new and points towards rnd
                 x_new.parent = nn_idx
 
                 # print "length nodes"
@@ -179,9 +180,9 @@ class RRTStar:
                     prev_node = self.nodes[x_near.parent]
                     old_theta = np.arctan2(x_near.y - prev_node.y, x_near.x - prev_node.x)
                     angle_fraction = 2*abs((old_theta - theta + np.pi/2) % np.pi - np.pi/2)/np.pi
-                start_path_width = (self.PATH_WIDTH_MAX - self.PATH_WIDTH_SMALL) * angle_fraction + self.PATH_WIDTH_SMALL
+                start_width = (self.PATH_WIDTH_MAX - self.PATH_WIDTH_SMALL) * angle_fraction + self.PATH_WIDTH_SMALL
                 # print start_path_width, "START PATH WIDTH"
-                if self.obstacle_free(x_near, x_new, theta, start_path_width, step):
+                if self.obstacle_free(x_near, x_new, theta, start_width, step):
                     # plt.plot([x_near.x, x_new.x], [x_new.y, x_new.y])
 
                     # find close nodes
@@ -191,8 +192,10 @@ class RRTStar:
                     # find the best parent for the node
                     x_new = self.choose_parent(x_new, near_idxs, step)
 
-                    # plt.plot([(x_new.x-self.x0) / self.resolution, (self.nodes[x_new.parent].x-self.x0) / self.resolution],
-                    #          [(x_new.y-self.y0) / self.resolution, (self.nodes[x_new.parent].y-self.y0) / self.resolution], 'g-')
+                    # plt.plot([(x_new.x-self.x0) / self.resolution, (self.nodes[x_new.parent].x-self.x0)
+                    #           / self.resolution],
+                    #          [(x_new.y-self.y0) / self.resolution, (self.nodes[x_new.parent].y-self.y0)
+                    #           / self.resolution], 'g-')
                     # plt.pause(.0001)
 
                     # add new node and rewire
@@ -253,7 +256,8 @@ class RRTStar:
                 nn_idx = i
         return nn_idx
 
-    def steer_to_node(self, x_near, rnd, step):
+    @staticmethod
+    def steer_to_node(x_near, rnd, step):
         """ Steers from x_near to a point on the line between rnd and x_near """
 
         theta = np.arctan2(rnd[1] - x_near.y, rnd[0] - x_near.x)
@@ -276,8 +280,10 @@ class RRTStar:
         mult = .5 * step / self.STEP_MAX
 
         bound0 = ((nearest_node.x, nearest_node.y), (new_node.x, new_node.y))
-        bound1 = ((nearest_node.x + dx_start - dy_start*mult, nearest_node.y - dy_start - dx_start*mult), (new_node.x + dx_end + dy_end*mult, new_node.y - dy_end + dx_end*mult))
-        bound2 = ((nearest_node.x - dx_start - dy_start*mult, nearest_node.y + dy_start - dx_start*mult), (new_node.x - dx_end + dy_end*mult, new_node.y + dy_end + dx_end*mult))
+        bound1 = ((nearest_node.x + dx_start - dy_start*mult, nearest_node.y - dy_start - dx_start*mult),
+                  (new_node.x + dx_end + dy_end*mult, new_node.y - dy_end + dx_end*mult))
+        bound2 = ((nearest_node.x - dx_start - dy_start*mult, nearest_node.y + dy_start - dx_start*mult),
+                  (new_node.x - dx_end + dy_end*mult, new_node.y + dy_end + dx_end*mult))
         if self.line_collision(bound0, plot) or self.line_collision(bound1, plot) or self.line_collision(bound2, plot):
             return False
         if start_path_width > .15:
@@ -285,8 +291,10 @@ class RRTStar:
             dy_start *= .5
             dx_end *= .5
             dy_end *= .5
-            bound3 = ((nearest_node.x + dx_start - dy_start*mult, nearest_node.y - dy_start - dx_start*mult), (new_node.x + dx_end + dy_end*mult, new_node.y - dy_end + dx_end*mult))
-            bound4 = ((nearest_node.x - dx_start - dy_start*mult, nearest_node.y + dy_start - dx_start*mult), (new_node.x - dx_end + dy_end*mult, new_node.y + dy_end + dx_end*mult))
+            bound3 = ((nearest_node.x + dx_start - dy_start*mult, nearest_node.y - dy_start - dx_start*mult),
+                      (new_node.x + dx_end + dy_end*mult, new_node.y - dy_end + dx_end*mult))
+            bound4 = ((nearest_node.x - dx_start - dy_start*mult, nearest_node.y + dy_start - dx_start*mult),
+                      (new_node.x - dx_end + dy_end*mult, new_node.y + dy_end + dx_end*mult))
             if self.line_collision(bound3, plot) or self.line_collision(bound4, plot):
                 return False
         return True
@@ -322,7 +330,6 @@ class RRTStar:
                 if plot:
                     plt.plot(column, row, 'go')
                     plt.pause(.05)
-                # print row, column, "rowcol"
                 # print self.map_width, self.map_height
                 if not self.permissible_region[row, column]:
                     if plot:
@@ -365,7 +372,6 @@ class RRTStar:
                 if plot:
                     plt.plot(column, row, 'go')
                     plt.pause(.05)
-                # print row, column, "rowcol"
                 # print self.map_width, self.map_height
                 if not self.permissible_region[row, column]:
                     if plot:
@@ -382,8 +388,8 @@ class RRTStar:
             return False
 
     def find_near_nodes(self, x_new, step):
-        length_nodes = len(self.nodes)
-        r = self.GAMMA_RRT * np.sqrt((np.log(length_nodes) / length_nodes))
+        # length_nodes = len(self.nodes)
+        # r = self.GAMMA_RRT * np.sqrt((np.log(length_nodes) / length_nodes))
         near_idxs = []
         for i in range(len(self.nodes)):
             node = self.nodes[i]
@@ -417,14 +423,14 @@ class RRTStar:
         #         distances.append(d)
         #     else:
         #         distances.append(float("inf"))
-        # mincost = min(distances)
-        # minind = near_idxs[distances.index(mincost)]
+        # min_cost = min(distances)
+        # min_ind = near_idxs[distances.index(min_cost)]
         #
-        # if mincost == float("inf"):
+        # if min_cost == float("inf"):
         #     return x_new
         #
-        # x_new.cost = mincost
-        # x_new.parent = minind
+        # x_new.cost = min_cost
+        # x_new.parent = min_ind
 
         d_angles = []
         for i in near_idxs:
@@ -452,14 +458,14 @@ class RRTStar:
             else:
                 d_angles.append(float("inf"))
 
-        mindeltaangle = min(d_angles)
-        minind = near_idxs[d_angles.index(mindeltaangle)]
+        min_delta_angle = min(d_angles)
+        min_ind = near_idxs[d_angles.index(min_delta_angle)]
 
-        if mindeltaangle == float("inf"):
+        if min_delta_angle == float("inf"):
             return x_new
 
-        x_new.cost = self.nodes[minind].distance((x_new.x, x_new.y))
-        x_new.parent = minind
+        x_new.cost = self.nodes[min_ind].distance((x_new.x, x_new.y))
+        x_new.parent = min_ind
 
         return x_new
 
@@ -481,13 +487,14 @@ class RRTStar:
                     prev_node = self.nodes[node.parent]
                     old_theta = np.arctan2(node.y - prev_node.y, node.x - prev_node.x)
                     angle_fraction = 2 * abs((old_theta - theta + np.pi / 2) % np.pi - np.pi / 2) / np.pi
-                start_path_width = (self.PATH_WIDTH_MAX - self.PATH_WIDTH_SMALL) * angle_fraction + self.PATH_WIDTH_SMALL
+                start_width = (self.PATH_WIDTH_MAX - self.PATH_WIDTH_SMALL) * angle_fraction + self.PATH_WIDTH_SMALL
                 # print start_path_width, "START PATH WIDTH"
 
-                if self.obstacle_free(node, x_new, theta, start_path_width, step, True):
+                if self.obstacle_free(node, x_new, theta, start_width, step, True):
                     node.parent = n - 1
                     node.cost = scost
-                    plt.plot((np.array([node.x, self.nodes[n-1].x]) - self.x0) / self.resolution, (np.array([node.y, self.nodes[n-1].y]) - self.y0) / self.resolution, 'r')
+                    plt.plot((np.array([node.x, self.nodes[n-1].x]) - self.x0) / self.resolution,
+                             (np.array([node.y, self.nodes[n-1].y]) - self.y0) / self.resolution, 'r')
                     plt.pause(.1)
 
     def get_last_idx(self):
@@ -500,10 +507,10 @@ class RRTStar:
         if len(goal_idxs) == 0:
             return None
 
-        mincost = min([self.nodes[i].cost for i in goal_idxs])
+        min_cost = min([self.nodes[i].cost for i in goal_idxs])
 
         for i in goal_idxs:
-            if self.nodes[i].cost == mincost:
+            if self.nodes[i].cost == min_cost:
                 return i
 
         return None
@@ -545,75 +552,42 @@ class RRTStar:
             print "No Bezier Path Found"
         return path
 
-    def update_path_width(self, dir):
-        pass
+    # def update_path_width(self, direct):
+    #     pass
         # self.path_width = new_pw
 
-    def bezier_path(self, P0, P1, P2, step):
-        max_len = int(((np.linalg.norm(P1 - P0) + np.linalg.norm(P2 - P1))) / self.RESOLUTION)
+    def bezier_path(self, p0, p1, p2, step):
+        max_len = int((np.linalg.norm(p1 - p0) + np.linalg.norm(p2 - p1)) / self.RESOLUTION)
         if not max_len:
             return None
         # path = np.zeros((max_len, 2))
         t = 0
         dt = 1.0 / (5 * max_len)
         # path[0] = P0
-        path = np.array([P0])
+        path = np.array([p0])
         i = 1
 
         while t < 1:
             t += dt
-            potential_point = self.bezier_curve(P0, P1, P2, t)
+            potential_point = self.bezier_curve(p0, p1, p2, t)
             if np.linalg.norm(path[i - 1] - potential_point) >= self.RESOLUTION:
                 theta = np.arctan2(potential_point[1] - path[i-1, 1], potential_point[0] - path[i-1, 0])
                 if self.nodeless_obstacle_free(path[i-1], potential_point, theta, self.path_width, step, True):
                     path = np.append(path, [potential_point], axis=0)
                     i += 1
-                    if np.linalg.norm(P2 - potential_point) < self.RESOLUTION:
+                    if np.linalg.norm(p2 - potential_point) < self.RESOLUTION:
                         break
                 else:
                     return None
-        path = np.append(path, [P2], axis=0)
+        path = np.append(path, [p2], axis=0)
         n = i + 1
         # path[:n, 2] = np.linspace(P0[2], P2[2], n)
 
         return path[:n]
 
     @staticmethod
-    def bezier_curve(P0, P1, P2, t):
-        return (1 - t) ** 2 * P0[:2] + 2 * t * (1 - t) * P1[:2] + t ** 2 * P2[:2]
-
-    # def nodeless_obstacle_free(self, nearest_node, new_node, theta, start_path_width):
-    #     """ Checks if the path from x_near to x_new is obstacle free """
-    #
-    #     dx_start = np.sin(theta) * start_path_width
-    #     dy_start = np.cos(theta) * start_path_width
-    #     dx_end = np.sin(theta) * self.path_width
-    #     dy_end = np.cos(theta) * self.path_width
-    #     # plt.plot([(new_node[0] - self.x0) / self.resolution, (nearest_node[0] - self.x0) / self.resolution],
-    #     #          [(new_node[1] - self.y0) / self.resolution, (nearest_node[1] - self.y0) / self.resolution])
-    #     # plt.pause(.001)
-    #
-    #     if nearest_node[0] < new_node[0]:
-    #         bound0 = ((nearest_node[0], nearest_node[1]), (new_node[0], new_node[1]))
-    #         bound1 = ((nearest_node[0] + dx_start, nearest_node[1] - dy_start), (new_node[0] + dx_end, new_node[1] - dy_end))
-    #         bound2 = ((nearest_node[0] - dx_start, nearest_node[1] + dy_start), (new_node[0] - dx_end, new_node[1] + dy_end))
-    #         # dx*=.5
-    #         # dy*=.5
-    #         # bound3 = ((nearest_node[0] + dx, nearest_node[1] - dy), (new_node[0] + dx, new_node[1] - dy))
-    #         # bound4 = ((nearest_node[0] - dx, nearest_node[1] + dy), (new_node[0] - dx, new_node[1] + dy))
-    #     else:
-    #         bound0 = ((new_node[0], new_node[1]), (nearest_node[0], nearest_node[1]))
-    #         bound1 = ((new_node[0] + dx_end, new_node[1] - dy_end), (nearest_node[0] + dx_start, nearest_node[1] - dy_start))
-    #         bound2 = ((new_node[0] - dx_end, new_node[1] + dy_end), (nearest_node[0] - dx_start, nearest_node[1] + dy_start))
-    #         # dx*=.5
-    #         # dy*=.5
-    #         # bound3 = ((new_node[0] + dx, new_node[1] - dy), (nearest_node[0] + dx, nearest_node[1] - dy))
-    #         # bound4 = ((new_node[0] - dx, new_node[1] + dy), (nearest_node[0] - dx, nearest_node[1] + dy))
-    #
-    #     if self.line_collision(bound0) or self.line_collision(bound1) or self.line_collision(bound2):# or self.line_collision(bound3) or self.line_collision(bound4):
-    #         return False
-    #     else:
-    #         return True
+    def bezier_curve(p0, p1, p2, t):
+        return (1 - t) ** 2 * p0[:2] + 2 * t * (1 - t) * p1[:2] + t ** 2 * p2[:2]
 
     def nodeless_obstacle_free(self, nearest_node, new_node, theta, start_path_width, step, plot=False):
         """ Checks if the path from x_near to x_new is obstacle free """
@@ -626,8 +600,10 @@ class RRTStar:
         mult = .5 * step / self.STEP_MAX
 
         bound0 = ((nearest_node[0], nearest_node[1]), (new_node[0], new_node[1]))
-        bound1 = ((nearest_node[0] + dx_start - dy_start*mult, nearest_node[1] - dy_start - dx_start*mult), (new_node[0] + dx_end + dy_end*mult, new_node[1] - dy_end + dx_end*mult))
-        bound2 = ((nearest_node[0] - dx_start - dy_start*mult, nearest_node[1] + dy_start - dx_start*mult), (new_node[0] - dx_end + dy_end*mult, new_node[1] + dy_end + dx_end*mult))
+        bound1 = ((nearest_node[0] + dx_start - dy_start*mult, nearest_node[1] - dy_start - dx_start*mult),
+                  (new_node[0] + dx_end + dy_end*mult, new_node[1] - dy_end + dx_end*mult))
+        bound2 = ((nearest_node[0] - dx_start - dy_start*mult, nearest_node[1] + dy_start - dx_start*mult),
+                  (new_node[0] - dx_end + dy_end*mult, new_node[1] + dy_end + dx_end*mult))
         if self.line_collision(bound0, plot) or self.line_collision(bound1, plot) or self.line_collision(bound2, plot):
             return False
         if start_path_width > .15:
@@ -635,8 +611,10 @@ class RRTStar:
             dy_start *= .5
             dx_end *= .5
             dy_end *= .5
-            bound3 = ((nearest_node[0] + dx_start - dy_start*mult, nearest_node[1] - dy_start - dx_start*mult), (new_node[0] + dx_end + dy_end*mult, new_node[1] - dy_end + dx_end*mult))
-            bound4 = ((nearest_node[0] - dx_start - dy_start*mult, nearest_node[1] + dy_start - dx_start*mult), (new_node[0] - dx_end + dy_end*mult, new_node[1] + dy_end + dx_end*mult))
+            bound3 = ((nearest_node[0] + dx_start - dy_start*mult, nearest_node[1] - dy_start - dx_start*mult),
+                      (new_node[0] + dx_end + dy_end*mult, new_node[1] - dy_end + dx_end*mult))
+            bound4 = ((nearest_node[0] - dx_start - dy_start*mult, nearest_node[1] + dy_start - dx_start*mult),
+                      (new_node[0] - dx_end + dy_end*mult, new_node[1] + dy_end + dx_end*mult))
             if self.line_collision(bound3, plot) or self.line_collision(bound4, plot):
                 return False
         return True
@@ -658,7 +636,7 @@ class RRTStar:
         except TypeError:
             return poly
 
-    def visualize(self, topic=1):
+    def visualize(self):
         if self.nodes:
             line_strip = Marker()
             line_strip.type = line_strip.LINE_STRIP
@@ -672,7 +650,7 @@ class RRTStar:
             line_strip.color.g = 1.0 if self.robot_name == "main_robot" else 0.0
             line_strip.color.b = 0.0 if self.robot_name == "main_robot" else 1.0
 
-            # marker orientaiton
+            # marker orientation
             line_strip.pose.orientation.x = 0.0
             line_strip.pose.orientation.y = 0.0
             line_strip.pose.orientation.z = 0.0
@@ -686,28 +664,31 @@ class RRTStar:
             # marker line points
             line_strip.points = []
 
-            # for node in self.nodes:
-                # if node.parent is not None:
-                    # parent = self.nodes[node.parent]
+            '''
+            for node in self.nodes:
+                if node.parent is not None:
+                    parent = self.nodes[node.parent]
 
-                    # plt.plot([node.x, parent.x], [node.y, parent.y], "-g")
+                    plt.plot([node.x, parent.x], [node.y, parent.y], "-g")
 
-                    # theta = np.arctan2(node.y - parent.y, node.x - parent.x)
+                    theta = np.arctan2(node.y - parent.y, node.x - parent.x)
 
-                    # dx = np.sin(theta) * self.path_width
-                    # dy = np.cos(theta) * self.path_width
+                    dx = np.sin(theta) * self.path_width
+                    dy = np.cos(theta) * self.path_width
 
-                    # plt.plot([parent.x + dx, node.x + dx], [parent.y - dy, node.y - dy], "-g")
-                    # plt.plot([parent.x - dx, node.x - dx], [parent.y + dy, node.y + dy], "-g")
+                    plt.plot([parent.x + dx, node.x + dx], [parent.y - dy, node.y - dy], "-g")
+                    plt.plot([parent.x - dx, node.x - dx], [parent.y + dy, node.y + dy], "-g")
 
-            # x, y = self.coords[:2]
-            # plt.plot(x, y, "ob")
-            # x, y = self.goal[:2]
-            # plt.plot(x, y, "or")
-            # plt.axis([self.x0, self.x0 + self.map_width, self.y0 + self.map_height, self.y0])
+            x, y = self.coords[:2]
+            plt.plot(x, y, "ob")
+            x, y = self.goal[:2]
+            plt.plot(x, y, "or")
+            plt.axis([self.x0, self.x0 + self.map_width, self.y0 + self.map_height, self.y0])
 
-            # plt.imshow(self.permissible_region, extent=[self.x0, self.x0 + self.map_width, self.y0 + self.map_height, self.y0])
-            # plt.pause(0.01)
+            plt.imshow(self.permissible_region, 
+                       extent=[self.x0, self.x0 + self.map_width, self.y0 + self.map_height, self.y0])
+            plt.pause(0.01)
+            '''
 
             for node in self.path:
                 new_point = Point()

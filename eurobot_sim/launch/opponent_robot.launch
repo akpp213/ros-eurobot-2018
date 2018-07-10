@@ -1,0 +1,15 @@
+<?xml version="1.0"?>
+<launch>
+
+  <!-- PARAMS -->
+  <arg name="color" default="orange" />
+  <param name="/field/color" value="$(arg color)" />
+  <param name="/camera/corner_camera" value="0"/>
+  <include file="$(find eurobot)/launch/params.launch"/>
+
+  <group ns="opponent_robot">
+    <!-- NODES -->
+    <node pkg="eurobot_sim" name="stm_node" type="stm_node.py" respawn="true" output="screen"/>
+  </group>
+
+</launch>
