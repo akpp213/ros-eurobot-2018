@@ -1,7 +1,7 @@
 <?xml version="1.0"?>
 <robot name="opponent_robot">
   <material name="red">
-    <color rgba="1 0 0 1"/>
+    <color rgba="1 0 0 .5"/>
   </material>
 
   <link name="opponent_robot">
@@ -9,7 +9,8 @@
     <visual>
       <origin xyz="0.0 0.0 .185" rpy="0 0 0" />
       <geometry>
-        <cylinder length="0.35" radius="0.15" />
+        <cylinder length="0.3" radius="0.15" />
+        <!--<box size="0.3 0.3 0.35" />-->
       </geometry>
       <material name="red"/>
     </visual>

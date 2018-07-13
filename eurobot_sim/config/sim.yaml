@@ -1,0 +1,56 @@
+simulation_rate: 120
+motion_model: "lazy"
+
+max_centipetal_accel: 3.5
+max_linear_accel: "2.5"
+
+detect_collision: 0
+bounce_mode: 0
+cspace_thetas: 16
+# whether or not to publish transformation frame to control wheel angle on the RACECAR model in RViz
+actuate_model: 0
+# whether or not to listen for drag/rotate commands from RViz tools
+listen_tools: 0
+
+# This param indicates which topic to listen to for control
+servo_topic: "/vesc/commands/servo/position"
+motor_topic: "/vesc/commands/motor/speed"
+
+# x,y,theta
+start_state: "0.12,0.525,0"
+
+# these params are for the laser scanner
+simulate_laser: 1
+laser_topic: "/scan"
+laser_rays: 1081
+laser_min_angle: -2.35619449
+laser_max_angle: 2.35619449
+laser_angle_offset: 1.63
+laser_max_range: 10
+# laser_frame: "secondary_robot"
+laser_rate: 40
+laser_range_method: "bl"
+
+# these params are for the odometer
+simulate_odom: 0
+odom_noise: 0
+odom_rate: 40
+odom_topic: "/vesc/odom"
+odom_frame: "base_link"
+
+# these params are for the IMU
+simulate_imu: 0
+imu_noise: 0
+imu_rate: 100
+imu_topic: "/imu/data"
+imu_frame: "imu"
+
+# transformation frame params
+publish_tf: 1
+tf_rate: 40
+tf_from: "map"
+# tf_to: "/laser"
+tf_to: "base_link"
+
+# debug
+diagnostic_rate: 0

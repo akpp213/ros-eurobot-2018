@@ -1,13 +1,13 @@
 robot_name: "opponent_robot"
 
 # initial coordinates (robot's, not LIDAR's coords!)
-start_orange: [1500.0, 1000.0, 0.0]
-start_green: [1500.0, 1000.0, 0.0]
+start_orange: [1500.0, 1000.0, 3.14]
+start_green: [1500.0, 1000.0, 3.14]
 
 # robot size
 dim_x: 300.0
 dim_y: 300.0
-dim_z: 350.0
+dim_z: 300.0
 dim_r: 150.0
 
 # LIDAR scanner coordinates in robot frame

@@ -3,6 +3,7 @@ import rospy
 from sensor_msgs.msg import LaserScan, PointCloud
 from geometry_msgs.msg import Point
 import numpy as np
+import tf
 from scipy.optimize import least_squares
 from sklearn.cluster import DBSCAN
 
@@ -11,17 +12,17 @@ MIN_INTENSITY = 3500
 LIDAR_DELTA_ANGLE = (np.pi / 180) / 4
 LIDAR_X = -0.094
 LIDAR_Y = 0.050
-LIDAR_START_ANGLE = -(np.pi / 2 + np.pi / 4)
+LIDAR_START_ANGLE = 1.63
 FIELD_X = 3
 FIELD_Y = 2
 BEYOND_FIELD = 0.1
 R = 0.08
-visualization = False
+visualization = True
 
 
 def scan_callback(scan):
     lidar_data = np.array([np.array(scan.ranges), scan.intensities]).T
-    landmarks = filter(lidar_data)
+    landmarks = filter_scan(lidar_data)
 
     if visualization == True:
         # create and pub PointArray of detected beacon points
@@ -44,8 +45,10 @@ def scan_callback(scan):
 
             class_member_mask = (labels == l)
 
-            center = get_center(landmarks[class_member_mask])
-            centers.append(Point(x=center.x[0], y=center.x[1], z=0))
+            group = landmarks[class_member_mask]
+            center = get_center(group)
+            size = np.linalg.norm(group[-1] - group[0])
+            centers.append(Point(x=center.x[0], y=center.x[1], z=size))
         
     # create and pub PointArray of detected centers
     array = PointCloud(points=centers)
@@ -54,14 +57,20 @@ def scan_callback(scan):
     pub_center.publish(array)
 
 
-def filter(scan):
+def filter_scan(scan):
     """Filters scan to get only landmarks (bright) located on field."""
+    loc = get_robot_loc("secondary_robot")
+    if loc is None:
+        return np.array([np.array([]), np.array([])]).T
     ind = np.where(scan[:, 1] > MIN_INTENSITY)[0]
-    a = LIDAR_DELTA_ANGLE * ind
+    a = LIDAR_DELTA_ANGLE * ind + laser_min_angle
     d = scan[ind, 0]
    
-    x = d * np.cos(a + LIDAR_START_ANGLE) + LIDAR_X
-    y = d * np.sin(a + LIDAR_START_ANGLE) + LIDAR_Y
+    # x = d * np.cos(a + LIDAR_START_ANGLE) + LIDAR_X
+    # y = d * np.sin(a + LIDAR_START_ANGLE) + LIDAR_Y
+
+    x = d * np.cos(a + loc[2] + lidar_start_angle) + loc[0]
+    y = d * np.sin(a + loc[2] + lidar_start_angle) + loc[1]
 
     # inside field only
     ind = np.where(np.logical_and(np.logical_and(x < FIELD_X + BEYOND_FIELD, x > -BEYOND_FIELD), np.logical_and(y < FIELD_Y + BEYOND_FIELD, y > - BEYOND_FIELD)))
@@ -69,6 +78,17 @@ def filter(scan):
     x = x[ind]
     y = y[ind]
     return np.array([x, y]).T
+
+
+def get_robot_loc(name):
+    try:
+        (trans, rot) = listener.lookupTransform('/map', '/' + name, rospy.Time(0))
+        yaw = tf.transformations.euler_from_quaternion(rot)[2]
+        state = np.array([trans[0], trans[1], yaw])
+        return state
+    except (tf.LookupException, tf.ConnectivityException, tf.ExtrapolationException):
+        rospy.loginfo("Simulator failed to lookup tf for " + name)
+        return None
 
 
 def get_center(landmarks):
@@ -89,7 +109,11 @@ if __name__ == "__main__":
     R = rospy.get_param("R")
     eps = rospy.get_param("clustering/eps")
     min_samples = rospy.get_param("clustering/min_samples")
-    rospy.Subscriber("scan", LaserScan, scan_callback, queue_size = 1)
+    listener = tf.TransformListener()
+    # name = rospy.get_param("/robot_name")
+    laser_min_angle = rospy.get_param("/secondary_robot/simulate/laser_min_angle")
+    lidar_start_angle = rospy.get_param("/secondary_robot/lidar_a")
+    rospy.Subscriber("/scan", LaserScan, scan_callback, queue_size=1)
     pub_center = rospy.Publisher("detected_robots", PointCloud, queue_size=1)
     if visualization == True:
         pub_landmarks = rospy.Publisher("landmarks", PointCloud, queue_size=1)

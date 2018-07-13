@@ -1,0 +1,24 @@
+<launch>
+
+	<!-- <include file="$(find headless_simulator)/launch/map_server.launch" /> -->
+	<include file="$(find eurobot_sim)/launch/map_server.launch" />
+	<!-- <arg name="map" default="$(find particle_filter)/maps/basement_fixed.map.yaml"/> -->
+    <!-- <node pkg="map_server" name="map_server" type="map_server" args="$(arg map)" /> -->
+
+    <!-- get racecar model -->
+    <!--<include file="$(find eurobot_sim)/launch/racecar_model.launch" />-->
+
+	<node pkg="eurobot_sim" type="simulate.py" name="simulate" ns="secondary_robot" respawn="true" output="screen">
+		<param name="robot_name" value="secondary_robot"/>
+		<param name="other_robots" value="2"/>
+
+		<rosparam file="$(find eurobot_sim)/config/sim.yaml" command="load" />
+	</node>
+
+	<node pkg="eurobot_sim" type="simulate.py" name="simulate" ns="main_robot" respawn="true" output="screen">
+		<param name="robot_name" value="main_robot"/>
+		<param name="other_robots" value="2"/>
+
+		<rosparam file="$(find eurobot_sim)/config/sim.yaml" command="load" />
+	</node>
+</launch>

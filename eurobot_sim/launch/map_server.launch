@@ -1,0 +1,5 @@
+<launch>
+    <arg name="map" default="$(find ak_eurobot_navigation)/map/field.yaml"/>
+    <node pkg="map_server" name="map_server" ns="main_robot" type="map_server" args="$(arg map)" />
+    <node pkg="map_server" name="map_server" ns="secondary_robot" type="map_server" args="$(arg map)" />
+</launch>
