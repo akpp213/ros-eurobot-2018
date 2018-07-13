@@ -21,7 +21,7 @@ start_state: "0.12,0.525,0"
 
 # these params are for the laser scanner
 simulate_laser: 1
-laser_topic: "/scan"
+laser_topic: "scan"
 laser_rays: 1081
 laser_min_angle: -2.35619449
 laser_max_angle: 2.35619449

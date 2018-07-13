@@ -11,7 +11,7 @@
   <include file="$(find eurobot)/launch/params.launch"/>
   <include file="$(find eurobot_sim)/launch/map_server.launch" />
 
-  <!--<group ns="main_robot">
+  <group ns="main_robot">
     <node pkg="eurobot_sim" name="stm_node" type="stm_node.py" output="screen"/>
 
     <node pkg="eurobot_sim" type="simulate.py" name="simulate" respawn="true" output="screen">
@@ -19,9 +19,9 @@
       <param name="other_robots" value="2"/>
       <rosparam file="$(find eurobot_sim)/config/sim.yaml" command="load" />
     </node>
-  </group>-->
+  </group>
 
-  <group ns="secondary_robot"> 
+  <group ns="secondary_robot">
     <node pkg="eurobot_sim" name="stm_node" type="stm_node.py" output="screen"/>
 
     <node pkg="eurobot_sim" type="simulate.py" name="simulate" respawn="true" output="screen">
