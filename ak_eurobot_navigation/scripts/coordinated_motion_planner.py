@@ -7,6 +7,8 @@ from std_msgs.msg import Bool
 from sensor_msgs.msg import PointCloud
 import numpy as np
 import pandas as pd
+import tf
+
 from threading import Lock
 import matplotlib.pyplot as plt
 
@@ -80,9 +82,13 @@ class CoordinatedMotionPlanner:
         self.resolution = None
         self.shape_map = (304, 204)
         self.permissible_region = None
+        self.occupancy_grid = None
+        self.prev_occupancy_grid = None
         self.map_updated = False
         self.map3d_updated = False
         self.subplots = []
+
+        self.listener = tf.TransformListener()
 
         self.RESOLUTION = 0.05
 
@@ -107,11 +113,27 @@ class CoordinatedMotionPlanner:
         self.coords[2] = msg.z
         self.map_updated = False
 
+    def find_start(self, name):
+        try:
+            (trans, rot) = self.listener.lookupTransform('/map', '/' + name, rospy.Time(0))
+            yaw = tf.transformations.euler_from_quaternion(rot)[2]
+            if name == self.robot_name:
+                self.coords[:2] = trans[:2]
+                self.coords[2] = yaw
+            else:
+                self.other_coords[:2] = trans[:2]
+                self.other_coords[2] = yaw
+            return True
+        except (tf.LookupException, tf.ConnectivityException, tf.ExtrapolationException):
+            rospy.loginfo("Simulator failed to lookup tf for " + name)
+            return False
+
     def update_goal(self, msg):
         if msg.x == -1 and msg.y == -1 and msg.z == -1:
             print "Setting goal to none"
             self.goal = None
         else:
+            self.path = []
             self.goal = np.zeros(3)
             self.goal[0] = msg.x
             self.goal[1] = msg.y
@@ -143,8 +165,10 @@ class CoordinatedMotionPlanner:
     def rrt_found(self, msg):
         pnts = self.poly_to_list(msg.points)
         self.other_path_found = True
+        self.find_start(self.other_robot_name)
         if len(pnts):
-            self.other_path = np.array(pd.unique(pnts).tolist())
+            # self.other_path = np.array(pd.unique(pnts).tolist())
+            self.other_path = np.array(pnts)
             res = self.TIME_RESOLUTION
         else:
             print "NO PATH FOR OTHER ROBOT"
@@ -156,15 +180,15 @@ class CoordinatedMotionPlanner:
         while not self.map_updated:
             pass
         print "Making", (len(self.other_path)-1) * res + 1, "time slices"
-        if len(self.permissible_region.shape) != 2:
-            self.permissible_region = self.permissible_region[0]
-        self.permissible_region = np.repeat(self.permissible_region[np.newaxis, :, :],
+        # while len(self.permissible_region.shape) > 2:
+        #     self.permissible_region = self.permissible_region[0]
+        self.permissible_region = np.repeat(self.occupancy_grid[np.newaxis, :, :],
                                             (len(self.other_path) - 1) * res + 1, axis=0)
         self.mutex.acquire()
         self.update_time_slices(res)
         self.mutex.release()
         self.map3d_updated = True
-        if self.goal is not None:
+        if self.goal is not None and self.find_start(self.robot_name):
             self.find_path_rrtstar(res)
 
     def update_map(self, msg):
@@ -178,8 +202,8 @@ class CoordinatedMotionPlanner:
             self.resolution = msg.info.resolution
             self.shape_map = (msg.info.width, msg.info.height)
             array255 = np.array(msg.data).reshape((msg.info.height, msg.info.width))
-            self.permissible_region = np.ones_like(array255, dtype=bool)
-            self.permissible_region[array255 == 100] = 0  # set occupied regions (100) to 0 and unoccupied regions to 1
+            self.occupancy_grid = np.ones_like(array255, dtype=bool)
+            self.occupancy_grid[array255 == 100] = 0  # set occupied regions (100) to 0 and unoccupied regions to 1
             self.map_updated = True
             self.map3d_updated = False
             print "Map Updated"
@@ -196,6 +220,22 @@ class CoordinatedMotionPlanner:
 
             # self.map_mutex.release()
             self.mutex.release()
+
+    def update_with_opponents(self, msg):
+        if self.map_updated:
+            # print "Adding Opponents"
+            array255 = np.array(msg.data).reshape(self.shape_map[::-1])
+            # plt.imshow(self.permissible_region)
+            # plt.pause(.0001)
+            self.occupancy_grid[self.prev_occupancy_grid == 0] = 1
+            self.occupancy_grid[array255 == 0] = 0
+            self.prev_occupancy_grid = array255
+            # self.mutex.acquire()
+            # if self.goal is not None and self.find_start(self.robot_name) and \
+            #         (self.path is None or not len(self.path) or not self.check_path()):
+            #     self.find_path_rrtstar()
+            # # elif self.goal is not None and not self.check_path():
+            # self.mutex.release()
 
     def update_time_slices(self, res=None):
         # robot_loc = [self.other_coords[0]/1000.0, self.other_coords[1]/1000.0, self.other_coords[2]]
@@ -476,7 +516,8 @@ class CoordinatedMotionPlanner:
                         self.mutex.release()
                         return
                     path = self.get_path(last_idx)
-                    self.path = pd.unique(np.array(path))
+                    # self.path = pd.unique(np.array(path))
+                    self.path = np.array(path)
                     print self.path, "path"
                     self.new_path.publish(self.to_poly(self.path))
                     self.visualize()
@@ -790,11 +831,11 @@ class CoordinatedMotionPlanner:
             node = self.nodes[last_idx]
             path.append((node.x, node.y))
             last_idx = node.parent
-        path.append((self.coords[0], self.coords[1]))
+        if (self.coords[0], self.coords[1]) not in path:
+            path.append((self.coords[0], self.coords[1]))
         path.reverse()
         path = np.array(path)
         if self.find_bezier:
-            self.visualize(2)
             result = self.bezier_path(path[0], path[path.shape[0]/2], path[-1])
             interval = int(np.ceil(path.shape[0]/2.0))-1
             while result is None and interval > 2:

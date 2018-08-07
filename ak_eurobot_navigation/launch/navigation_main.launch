@@ -1,12 +1,14 @@
 <?xml version="1.0"?>
 <launch>
 
-  <node name="rrtstar" pkg="ak_eurobot_navigation" type="rrtstar.py" ns="main_robot" respawn="true" output="screen">
-    <rosparam file="$(find ak_eurobot_navigation)/config/motion_planner_main_robot_params.yaml" command="load" />
-  </node>
-  <node name="motion_planner" pkg="ak_eurobot_navigation" type="motion_planner.py" ns="main_robot" respawn="true" output="screen">
-    <rosparam file="$(find ak_eurobot_navigation)/config/motion_planner_main_robot_params.yaml" command="load" />
-  </node>
-  <node name="map_server" pkg="ak_eurobot_navigation" type="map_server.py" ns="main_robot" respawn="true" output="screen"/>
+  <group ns="main_robot">
+    <include file="$(find ak_eurobot_navigation)/launch/predicted_planning.launch"/>
+    <!--<include file="$(find ak_eurobot_navigation)/launch/rrtstar.launch"/>-->
+
+    <node name="motion_planner" pkg="ak_eurobot_navigation" type="motion_planner.py" respawn="true" output="screen">
+      <rosparam file="$(find ak_eurobot_navigation)/config/motion_planner_main_robot_params.yaml" command="load" />
+    </node>
+
+  </group>
 
 </launch>

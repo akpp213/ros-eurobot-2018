@@ -125,20 +125,20 @@ class Map(object):
         x, y = np.meshgrid(np.arange(0, self.occupancy_grid.shape[1]), np.arange(0, self.occupancy_grid.shape[0]))
 
         # upper point
-        x1 = (coords[0]+self.x0) / self.map_info.resolution - size[1] / 2 * np.sin(coords[2])
-        y1 = (coords[1]+self.y0) / self.map_info.resolution + size[1] / 2 * np.cos(coords[2])
+        x1 = (coords[0]-self.x0) / self.map_info.resolution - size[1] / 2 * np.sin(coords[2])
+        y1 = (coords[1]-self.y0) / self.map_info.resolution + size[1] / 2 * np.cos(coords[2])
 
         # lower point
-        x2 = (coords[0]+self.x0) / self.map_info.resolution + size[1] / 2 * np.sin(coords[2])
-        y2 = (coords[1]+self.y0) / self.map_info.resolution - size[1] / 2 * np.cos(coords[2])
+        x2 = (coords[0]-self.x0) / self.map_info.resolution + size[1] / 2 * np.sin(coords[2])
+        y2 = (coords[1]-self.y0) / self.map_info.resolution - size[1] / 2 * np.cos(coords[2])
 
         # left point
-        x3 = (coords[0]+self.x0) / self.map_info.resolution - size[0] / 2 * np.cos(coords[2])
-        y3 = (coords[1]+self.y0) / self.map_info.resolution - size[0] / 2 * np.sin(coords[2])
+        x3 = (coords[0]-self.x0) / self.map_info.resolution - size[0] / 2 * np.cos(coords[2])
+        y3 = (coords[1]-self.y0) / self.map_info.resolution - size[0] / 2 * np.sin(coords[2])
 
         # right point
-        x4 = (coords[0]+self.x0) / self.map_info.resolution + size[0] / 2 * np.cos(coords[2])
-        y4 = (coords[1]+self.y0) / self.map_info.resolution + size[0] / 2 * np.sin(coords[2])
+        x4 = (coords[0]-self.x0) / self.map_info.resolution + size[0] / 2 * np.cos(coords[2])
+        y4 = (coords[1]-self.y0) / self.map_info.resolution + size[0] / 2 * np.sin(coords[2])
 
         # 'free' cells outside of each side of the robot
         a = coords[2] % (2 * np.pi)
@@ -163,39 +163,41 @@ class Map(object):
 
         x, y = np.meshgrid(np.arange(0, self.occupancy_grid.shape[1]), np.arange(0, self.occupancy_grid.shape[0]))
 
-        coords_prog = np.linspace(coords[2], coords[2]+np.pi/2, 8)
+        # coords_prog = np.linspace(coords[2], coords[2]+np.pi/2, 8)
+        #
+        # # upper point
+        # x1 = coords[0] / self.map_info.resolution - rad * np.sin(coords_prog)
+        # y1 = coords[1] / self.map_info.resolution + rad * np.cos(coords_prog)
+        #
+        # # lower point
+        # x2 = coords[0] / self.map_info.resolution + rad * np.sin(coords_prog)
+        # y2 = coords[1] / self.map_info.resolution - rad * np.cos(coords_prog)
+        #
+        # # left point
+        # x3 = coords[0] / self.map_info.resolution - rad * np.cos(coords_prog)
+        # y3 = coords[1] / self.map_info.resolution - rad * np.sin(coords_prog)
+        #
+        # # right point
+        # x4 = coords[0] / self.map_info.resolution + rad * np.cos(coords_prog)
+        # y4 = coords[1] / self.map_info.resolution + rad * np.sin(coords_prog)
+        #
+        # # 'free' cells outside of each side of the robot
+        # for i, coord in enumerate(coords_prog):
+        #     a = coord % (2 * np.pi)
+        #     if a < np.pi / 2 or a > 3 * np.pi / 2:
+        #         robot[y - y1[i] > (x - x1[i]) * np.tan(coord)] = False
+        #         robot[y - y2[i] < (x - x2[i]) * np.tan(coord)] = False
+        #     else:
+        #         robot[y - y1[i] < (x - x1[i]) * np.tan(coord)] = False
+        #         robot[y - y2[i] > (x - x2[i]) * np.tan(coord)] = False
+        #     if a < np.pi:
+        #         robot[y - y3[i] < (x - x3[i]) * np.tan(np.pi / 2 + coord)] = False
+        #         robot[y - y4[i] > (x - x4[i]) * np.tan(np.pi / 2 + coord)] = False
+        #     else:
+        #         robot[y - y3[i] > (x - x3[i]) * np.tan(np.pi / 2 + coord)] = False
+        #         robot[y - y4[i] < (x - x4[i]) * np.tan(np.pi / 2 + coord)] = False
 
-        # upper point
-        x1 = coords[0] / self.map_info.resolution - rad * np.sin(coords_prog)
-        y1 = coords[1] / self.map_info.resolution + rad * np.cos(coords_prog)
-
-        # lower point
-        x2 = coords[0] / self.map_info.resolution + rad * np.sin(coords_prog)
-        y2 = coords[1] / self.map_info.resolution - rad * np.cos(coords_prog)
-
-        # left point
-        x3 = coords[0] / self.map_info.resolution - rad * np.cos(coords_prog)
-        y3 = coords[1] / self.map_info.resolution - rad * np.sin(coords_prog)
-
-        # right point
-        x4 = coords[0] / self.map_info.resolution + rad * np.cos(coords_prog)
-        y4 = coords[1] / self.map_info.resolution + rad * np.sin(coords_prog)
-
-        # 'free' cells outside of each side of the robot
-        for i, coord in enumerate(coords_prog):
-            a = coord % (2 * np.pi)
-            if a < np.pi / 2 or a > 3 * np.pi / 2:
-                robot[y - y1[i] > (x - x1[i]) * np.tan(coord)] = False
-                robot[y - y2[i] < (x - x2[i]) * np.tan(coord)] = False
-            else:
-                robot[y - y1[i] < (x - x1[i]) * np.tan(coord)] = False
-                robot[y - y2[i] > (x - x2[i]) * np.tan(coord)] = False
-            if a < np.pi:
-                robot[y - y3[i] < (x - x3[i]) * np.tan(np.pi / 2 + coord)] = False
-                robot[y - y4[i] > (x - x4[i]) * np.tan(np.pi / 2 + coord)] = False
-            else:
-                robot[y - y3[i] > (x - x3[i]) * np.tan(np.pi / 2 + coord)] = False
-                robot[y - y4[i] < (x - x4[i]) * np.tan(np.pi / 2 + coord)] = False
+        robot[(x - coords[0]/self.map_info.resolution) ** 2 + (y - coords[1]/self.map_info.resolution) ** 2 >= rad**2] = False
 
         return robot
 

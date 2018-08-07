@@ -17,6 +17,7 @@ class stm_node():
         self.pub_odom = rospy.Publisher("odom", Odometry, queue_size=1)
 
         self.robot_name = rospy.get_param('robot_name')
+        print self.robot_name
         self.br = tf.TransformBroadcaster()
 
         # high-level commands info (for handling response)

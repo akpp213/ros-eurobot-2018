@@ -5,8 +5,10 @@
   <rosparam file="$(find eurobot)/config/particle_filter_params.yaml" command="load" ns="main_robot/particle_filter" />
   <rosparam file="$(find eurobot)/config/particle_filter_params.yaml" command="load" ns="secondary_robot/particle_filter" />
   <rosparam file="$(find eurobot)/config/particle_filter_params.yaml" command="load" ns="opponent_robot/particle_filter" />
+  <rosparam file="$(find eurobot)/config/particle_filter_params.yaml" command="load" ns="opponent_robot_secondary/particle_filter" />
   <rosparam file="$(find eurobot)/config/main_robot_params.yaml" command="load" ns="main_robot" />
   <rosparam file="$(find eurobot)/config/secondary_robot_params.yaml" command="load" ns="secondary_robot" />
   <rosparam file="$(find eurobot)/config/opponent_robot_params.yaml" command="load" ns="opponent_robot" />
+  <rosparam file="$(find eurobot)/config/opponent_robot_secondary_params.yaml" command="load" ns="opponent_robot_secondary" />
 
 </launch>

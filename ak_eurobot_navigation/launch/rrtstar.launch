@@ -1,0 +1,7 @@
+<?xml version="1.0"?>
+<launch>
+
+  <node name="rrtstar" pkg="ak_eurobot_navigation" type="rrtstar.py" respawn="true" output="screen"/>
+  <node name="map_server" pkg="ak_eurobot_navigation" type="map_server.py" respawn="true" output="screen"/>
+
+</launch>

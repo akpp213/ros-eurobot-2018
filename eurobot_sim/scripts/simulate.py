@@ -622,16 +622,16 @@ class Simulator(object):
         if self.publish_tf: diag_str += "Publish TF rate: %.1f, " % self.tf_timer.fps()
         diag_str += "Simulation rate: %.1f, " % self.sim_timer.fps()
         print diag_str[:-2]
-        print "State: x: %.2f, y: %.2f, theta: %.2f, steering angle: %.2f, throttle: %.2f" % (
-        self.car.state[0], self.car.state[1], self.car.state[2], self.car.state[3], self.car.state[4])
+        print "State: x: %.2f, y: %.2f, theta: %.2f, steering angle: %.2f, throttle: %.2f" % \
+              (self.car.state[0], self.car.state[1], self.car.state[2], self.car.state[3], self.car.state[4])
 
     def get_omap(self):
         map_service_name = rospy.get_param("~static_map", "static_map")
         print "Fetching map from service: ", map_service_name
         rospy.wait_for_service(map_service_name)
         map_msg = rospy.ServiceProxy(map_service_name, GetMap)().map
-        num_other_robots = rospy.get_param("~other_robots")
-        self.omap = utils.Map(map_msg, num_other_robots)
+        self.num_other_robots = rospy.get_param("~other_robots")
+        self.omap = utils.Map(map_msg, self.num_other_robots)
         self.map_initialized = True
         print "Finished loading map"
 
@@ -640,22 +640,31 @@ class Simulator(object):
         other_bot = "main_robot" if robot_name == "secondary_robot" else "secondary_robot"
         our_coords = self.find_robot_coords(other_bot)
         opp_coords = self.find_robot_coords("opponent_robot")
+
         if our_coords is not None:
             size = np.array([rospy.get_param('/' + other_bot + '/dim_x'),
                             rospy.get_param('/' + other_bot + '/dim_y')]) / 1000
             our_mask = self.omap.our_robot(size/self.omap.map_info.resolution, our_coords)
             self.omap.update_omap(our_mask, 0)
-            if not self.laser.init_with_other_bot:
-                return True
-        if opp_coords is not None and self.laser.init_with_other_bot:
+
+        if self.num_other_robots == 3:
+            opp_secondary_coords = self.find_robot_coords("opponent_robot_secondary")
+            if opp_secondary_coords is not None:
+                rad = rospy.get_param('/opponent_robot_secondary/dim_r') / 1000.0
+                opp_mask_secondary = self.omap.our_robot_circle(rad / self.omap.map_info.resolution, opp_secondary_coords + [.02, .02, 0])
+                self.omap.update_omap(opp_mask_secondary, 2)
+
+        if opp_coords is not None:
             # size = np.array([rospy.get_param('/opponent_robot/dim_x'),
             #                 rospy.get_param('/opponent_robot/dim_y')]) / 1000.0
             rad = rospy.get_param('/opponent_robot/dim_r') / 1000.0
-            opp_mask = self.omap.our_robot_circle(rad/self.omap.map_info.resolution, opp_coords)
-            # plt.imshow(opp_mask)
-            # plt.pause(1)
+            opp_mask = self.omap.our_robot_circle(rad/self.omap.map_info.resolution, opp_coords + [.02, .02, 0])
+            # rad = rospy.get_param('/opponent_robot_secondary/dim_r') / 1000.0
+            # opp_mask_secondary = self.omap.our_robot_circle(rad / self.omap.map_info.resolution, opp_secondary_coords)
             self.omap.update_omap(opp_mask, 1)
+            # self.omap.update_omap(opp_mask_secondary, 2)
             return True
+
         return False
 
     def find_robot_coords(self, name):

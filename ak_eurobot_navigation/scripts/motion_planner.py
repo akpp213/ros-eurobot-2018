@@ -1,7 +1,6 @@
 #!/usr/bin/env python
 import rospy
 import numpy as np
-# import pandas as pd
 import tf2_ros
 import tf
 from tf.transformations import euler_from_quaternion
@@ -12,6 +11,8 @@ from threading import Lock
 from std_msgs.msg import Int32MultiArray
 from sensor_msgs.msg import LaserScan, PointCloud
 from nav_msgs.msg import OccupancyGrid
+
+import matplotlib.pyplot as plt
 
 
 def rotate_vel(start_vel, angle):
@@ -77,6 +78,8 @@ class MotionPlanner:
         self.lidar_point = np.array([rospy.get_param("lidar_x"), rospy.get_param("lidar_y"), rospy.get_param("lidar_a")])
         self.scan = None
         self.ranges = None
+        self.intensities = None
+        self.min_intensity = rospy.get_param("~MIN_LIDAR_INTENSITY", 3500)
         self.angles = None
         self.fourth_closest = None
         self.fourth_angle = None
@@ -116,6 +119,7 @@ class MotionPlanner:
         self.resolution = None
         self.shape_map = (304, 204)
         self.permissible_region = None
+        self.prev_permissible_region = None
         self.map_updated = False
         self.path_found = False
         self.stuck = False
@@ -152,9 +156,11 @@ class MotionPlanner:
         rospy.Subscriber("move_command", String, self.cmd_callback, queue_size=1)
         rospy.Subscriber("response", String, self.response_callback, queue_size=1)
         rospy.Subscriber("barrier_rangefinders_data", Int32MultiArray, self.rangefinder_data_callback, queue_size=3)
-        rospy.Subscriber("/map_server/opponent_robots", PointCloud, self.detected_robots_callback, queue_size=1)
+        # rospy.Subscriber("/map_server/opponent_robots", PointCloud, self.detected_robots_callback, queue_size=1)
+        rospy.Subscriber("/map_w_opponent", OccupancyGrid, self.update_with_opponents, queue_size=1)
         rospy.Subscriber("rrt_path", Polygon, self.rrt_found, queue_size=1)
-        rospy.Subscriber("scan", LaserScan, self.scan_callback, queue_size=5)
+        rospy.Subscriber("new_probability_path", Polygon, self.prm_path_found, queue_size=1)
+        # rospy.Subscriber("/" + self.robot_name + "/scan", LaserScan, self.scan_callback, queue_size=5)
         rospy.Subscriber("/"+self.other_robot_name+"/no_path_found", Bool, self.no_path, queue_size=1)
         rospy.Subscriber("/main_robot/map", OccupancyGrid, self.update_map, queue_size=3)
         rospy.Subscriber("/secondary_robot/map", OccupancyGrid, self.update_map, queue_size=3)
@@ -175,7 +181,18 @@ class MotionPlanner:
             self.permissible_region = np.ones_like(array255, dtype=bool)
             self.permissible_region[array255 == 100] = 0  # setting occupied regions (100) to 0. Unoccupied regions are a 1
             self.map_updated = True
+            # plt.imshow(self.permissible_region)
+            # plt.pause(1)
             print "Map Updated"
+
+    def update_with_opponents(self, msg):
+        if self.map_updated:
+            array255 = np.array(msg.data).reshape(self.shape_map[::-1])
+            # plt.imshow(self.permissible_region)
+            # plt.pause(.0001)
+            self.permissible_region[self.prev_permissible_region == 0] = 1
+            self.permissible_region[array255 == 0] = 0
+            self.prev_permissible_region = array255
 
     def plan(self, event):
         self.mutex.acquire()
@@ -276,7 +293,10 @@ class MotionPlanner:
                 vel = self.follow_path()
                 vel[0] *= goal_d*3
                 vel[1] *= goal_d*3
-                vel[2] = -self.W_MAX * self.find_rot(np.arctan2(vel[1], vel[0])) * 3
+                if self.path[1, 2] == 0:
+                    vel[2] = -self.W_MAX * self.find_rot(np.arctan2(vel[1], vel[0])) * 3
+                else:
+                    vel[2] *= goal_d*3
                 # vel[2] = self.W_MAX * goal_distance[2] / goal_d
                 if np.linalg.norm(vel[:2]) < self.V_MAX/2:
                 # if abs(vel[0]) < .05 and abs(vel[1] < .05):
@@ -341,6 +361,7 @@ class MotionPlanner:
 
     def scan_callback(self, scan):
         self.ranges = np.array(scan.ranges) * 1000
+        self.intensities = np.array(scan.intensities)
         self.angles = np.arange(scan.angle_max - scan.angle_increment, scan.angle_min - scan.angle_increment, -scan.angle_increment)
         self.angles = np.arange(scan.angle_min, scan.angle_max, scan.angle_increment)
         motion_angle = np.arctan2(self.last_valid_vel[1], self.last_valid_vel[0])
@@ -354,7 +375,9 @@ class MotionPlanner:
         # print self.ranges
         self.ranges[self.ranges < scan.range_min*1000] = 0
         self.ranges[self.ranges > scan.range_max*1000] = 0
-        forward_ranges = self.ranges[~((rel_angles < np.pi/3)-(rel_angles > -np.pi/3)) & (self.ranges > 0)]
+        # self.ranges[self.intensities < self.min_intensity] = 0
+        # forward_ranges = self.ranges[~((rel_angles < np.pi/3)-(rel_angles > -np.pi/3)) & (self.ranges > 0)]
+        forward_ranges = self.ranges[(rel_angles < np.pi / 3) & (rel_angles > -np.pi / 3) & (self.ranges > 0)]
         self.fourth_closest = np.sort(forward_ranges)[0]
         self.fourth_angle = self.angles[np.where(self.ranges == self.fourth_closest)][np.argmin(np.abs(self.angles[np.where(self.ranges == self.fourth_closest)]))]
         self.travel_direc = motion_angle
@@ -410,7 +433,17 @@ class MotionPlanner:
         else:
             self.path_found = True
             # self.path = np.array(pd.unique(pnts).tolist())
-            self.path = np.array(pnts)
+            self.path = pnts
+
+    def prm_path_found(self, msg):
+        print "prm path found"
+        pnts = self.poly_to_list(msg.points)
+        if not len(pnts):
+            self.path = None
+        else:
+            self.path_found = True
+            # self.path = np.array(pd.unique(pnts).tolist())
+            self.path = pnts
 
     def update_path(self):
         self.disable_circle = True
@@ -425,7 +458,7 @@ class MotionPlanner:
         ret_type = None
         rad = dist
         while ret_type != 2 and ret_type != 3:  # types 2, 3 imply either 2 intersections or 1 in desired direction
-            seg = [self.path[index], self.path[index + 1]]
+            seg = [self.path[index, :2], self.path[index + 1, :2]]
             ret_type, closest_pnt, second_intersect = self.goal_point(center_global, rad, seg)
             if ret_type == 3:
                 first_intersect = closest_pnt
@@ -480,10 +513,11 @@ class MotionPlanner:
         angle_diff = (stop_angle - start_angle) % (2*np.pi)
         angle_increment = self.STEP / r
         iters = int(angle_diff / angle_increment)
+        th_increment = (stop[2] - start[2]) / iters
         print iters, "iters"
-        circle = np.array([(start[0], start[1])])
+        circle = np.array([(start[0], start[1], start[2])])
         for i in xrange(iters):
-            new_point = (center[0] - np.cos(start_angle)*r, center[1] + np.sin(start_angle)*r)
+            new_point = (center[0] - np.cos(start_angle)*r, center[1] + np.sin(start_angle)*r, start[2] + i*th_increment)
             theta = np.arctan2(new_point[1] - circle[i, 1], new_point[0] - circle[i, 0])
             if self.nodeless_obstacle_free(circle[i], new_point, theta):
                 circle = np.append(circle, [new_point], axis=0)
@@ -584,17 +618,17 @@ class MotionPlanner:
             start.x = self.coords[0]
             start.y = self.coords[1]
             start.z = self.coords[2]
-            self.pub_current_coords.publish(start)
+            # self.pub_current_coords.publish(start)
             self.path_plan_pub.publish(goal)
 
     @staticmethod
     def poly_to_list(points):
         if points == []:
             return []
-        pnts = []
-        for pt in points:
-            pnts.append((pt.x, pt.y))
-        return np.array(pnts)
+        pnts = np.empty((len(points), 3))
+        for i in xrange(len(points)):
+            pnts[i] = [points[i].x, points[i].y, points[i].z]
+        return pnts
 
     def no_path(self, msg):
         self.path = []
@@ -609,7 +643,7 @@ class MotionPlanner:
         start.x = self.coords[0]
         start.y = self.coords[1]
         start.z = self.coords[2]
-        self.pub_current_coords.publish(start)
+        # self.pub_current_coords.publish(start)
         self.path_plan_pub.publish(goal)
 
     def find_rot(self, travel):
@@ -629,12 +663,12 @@ class MotionPlanner:
             ret_type = None
             look = self.LOOKAHEAD
             while ret_type != 2 and ret_type != 3:  # types 2, 3 imply either 2 intersections or 1 in desired direction
-                seg = [self.path[index], self.path[index+1]]
+                seg = [self.path[index, :2], self.path[index+1, :2]]
                 ret_type, closest_pnt, intersect_pnt = self.goal_point(self.coords[:2], look, seg)
                 if index < self.path.shape[0]-2:
                     index += 1
                 elif ret_type == 1 or ret_type == -1:
-                    intersect_pnt = self.path[-1]
+                    intersect_pnt = self.path[-1, :2]
                     ret_type = 2
                 else:
                     look *= 1.5
@@ -664,7 +698,9 @@ class MotionPlanner:
                 else:
                     v_y = -self.V_MAX
                 v_x = float(trans_pt[0]) / trans_pt[1] * v_y
-            v_w = 0
+            dist = np.linalg.norm(self.coords[:2] - self.path[ind+1, :2])
+            diff = (self.path[ind+1, 2] - self.coords[2] + np.pi) % (2 * np.pi) - np.pi
+            v_w = diff/dist * np.linalg.norm([v_x, v_y])
 
             vel = [v_x, v_y, v_w]
             # print vel, "VELOCITY"
@@ -679,7 +715,7 @@ class MotionPlanner:
         mps = ([x, y])*np.ones((len(self.path)-1, 2))
 
         # finds the closest point to the robot in each line segment
-        min_dists = self.find_min_dist(self.path[:-1], self.path[1:], mps)
+        min_dists = self.find_min_dist(self.path[:-1, :2], self.path[1:, :2], mps)
 
         closest_seg_index = np.argmin(min_dists)
         return closest_seg_index
@@ -927,7 +963,7 @@ class MotionPlanner:
         coords.x = self.coords[0]
         coords.y = self.coords[1]
         coords.z = self.coords[2]
-        self.pub_current_coords.publish(coords)
+        # self.pub_current_coords.publish(coords)
         rospy.loginfo("===============================================================================================")
         rospy.loginfo("NEW CMD:\t" + str(data.data))
 
@@ -1097,13 +1133,13 @@ class MotionPlanner:
             rospy.loginfo("MotionPlanner failed to lookup tf2.")
             return False
 
-    def detected_robots_callback(self, data):
-        print "detected enemy robots"
-        if len(data.points) == 0:
-            self.opponent_robots = np.array([])
-        else:
-            self.opponent_robots = np.array([[robot.x, robot.y] for robot in data.points])
-        # self.robots_upd_time = data.header.stamp
+    # def detected_robots_callback(self, data):
+    #     print "detected enemy robots"
+    #     if len(data.points) == 0:
+    #         self.opponent_robots = np.array([])
+    #     else:
+    #         self.opponent_robots = np.array([[robot.x, robot.y] for robot in data.points])
+    #     # self.robots_upd_time = data.header.stamp
 
     def distance_to_closest_robot(self):
         ans = np.linalg.norm(self.other_robot_coords)

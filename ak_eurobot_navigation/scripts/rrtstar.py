@@ -6,7 +6,8 @@ from visualization_msgs.msg import Marker
 from std_msgs.msg import Bool
 from sensor_msgs.msg import PointCloud
 import numpy as np
-# import pandas as pd
+import tf
+
 from threading import Lock
 import matplotlib.pyplot as plt
 
@@ -63,7 +64,10 @@ class RRTStar:
         self.resolution = None
         self.shape_map = (304, 204)
         self.permissible_region = None
+        self.prev_permissible_region = None
         self.map_updated = False
+
+        self.listener = tf.TransformListener()
 
         self.RESOLUTION = 0.05
 
@@ -71,10 +75,11 @@ class RRTStar:
         self.viz_pub = rospy.Publisher("visualization_msgs/Marker", Marker, queue_size=3)
         self.viz_pub2 = rospy.Publisher("visualization_msgs/Marker2", Marker, queue_size=3)
         self.no_path = rospy.Publisher("no_path_found", Bool, queue_size=1)
-        rospy.Subscriber('current_coords', Point, self.update_coords, queue_size=1)
+        # rospy.Subscriber('current_coords', Point, self.update_coords, queue_size=1)
         rospy.Subscriber('new_goal_loc', Point, self.update_goal, queue_size=1)
         # rospy.Subscriber("/main_robot/map", OccupancyGrid, self.update_map, queue_size=3)
         rospy.Subscriber("map", OccupancyGrid, self.update_map, queue_size=3)
+        rospy.Subscriber("/map_w_opponent", OccupancyGrid, self.update_with_opponents, queue_size=1)
         rospy.Subscriber("/map_server/opponent_robots", PointCloud, self.detected_robots_callback, queue_size=1)
         # rospy.Subscriber("lookahead_pnts", Point, self.add_look, queue_size=1)
 
@@ -86,16 +91,28 @@ class RRTStar:
         # self.goal = None
         self.map_updated = False
 
+    def find_start(self):
+        try:
+            (trans, rot) = self.listener.lookupTransform('/map', '/'+self.robot_name, rospy.Time(0))
+            yaw = tf.transformations.euler_from_quaternion(rot)[2]
+            self.coords[:2] = trans[:2]
+            self.coords[2] = yaw
+            return True
+        except (tf.LookupException, tf.ConnectivityException, tf.ExtrapolationException):
+            rospy.loginfo("Simulator failed to lookup tf for robot")
+            return False
+
     def update_goal(self, msg):
         if msg.x == -1 and msg.y == -1 and msg.z == -1:
             self.goal = None
         else:
+            self.path = []
             self.goal = np.zeros(3)
             self.goal[0] = msg.x
             self.goal[1] = msg.y
             self.goal[2] = msg.z
-            if self.map_updated and (self.path is None or not len(self.path)):
-                self.find_path_rrtstar()
+            # if self.map_updated and (self.path is None or not len(self.path)):
+            #     self.find_path_rrtstar()
 
     def update_map(self, msg):
         # print "Updating Map"
@@ -111,8 +128,24 @@ class RRTStar:
             self.permissible_region[array255 == 100] = 0  # set occupied regions (100) to 0 and unoccupied regions to 1
             self.map_updated = True
             print "Map Updated"
-            if self.goal is not None and (self.path is None or not len(self.path)):
+            # if self.goal is not None and (self.path is None or not len(self.path)):
+            #     self.find_path_rrtstar()
+
+    def update_with_opponents(self, msg):
+        if self.map_updated:
+            # print "Adding Opponents"
+            array255 = np.array(msg.data).reshape(self.shape_map[::-1])
+            # plt.imshow(self.permissible_region)
+            # plt.pause(.0001)
+            self.permissible_region[self.prev_permissible_region == 0] = 1
+            self.permissible_region[array255 == 0] = 0
+            self.prev_permissible_region = array255
+            self.mutex.acquire()
+            if self.goal is not None and self.find_start() and \
+                    (self.path is None or not len(self.path) or not self.check_path()):
                 self.find_path_rrtstar()
+            # elif self.goal is not None and not self.check_path():
+            self.mutex.release()
 
     def detected_robots_callback(self, data):
         if len(data.points) == 0:
@@ -121,11 +154,41 @@ class RRTStar:
             self.opponent_robots = np.array([[robot.x, robot.y] for robot in data.points])
         self.robots_upd_time = data.header.stamp
 
+    def check_path(self):
+        first = np.argmin(np.linalg.norm(self.path - self.coords[:2], axis=1)) + 1
+        for i in xrange(first, self.path.shape[0]):
+            start = self.path[i-1]
+            end = self.path[i]
+            dx = end[0] - start[0]
+            dy = end[1] - start[1]
+            theta_new = np.arctan2(dy, dx)
+
+            if i == 1:
+                # d_angles.append(float("inf"))
+                # continue
+                delta = abs((self.coords[2] - theta_new + np.pi / 2) % np.pi - np.pi / 2)
+                angle_fraction = 2 * delta / np.pi
+                # delta = abs((self.coords[2] - theta_new + np.pi) % (2 * np.pi) - np.pi)
+            else:
+                prev_node = self.path[i-2]
+                old_theta = np.arctan2(start[1] - prev_node[1], start[0] - prev_node[0])
+                delta = abs((old_theta - theta_new + np.pi) % (2 * np.pi) - np.pi)
+                angle_fraction = 2 * abs((old_theta - theta_new + np.pi / 2) % np.pi - np.pi / 2) / np.pi
+            start_path_width = (self.PATH_WIDTH_MAX - self.PATH_WIDTH_SMALL) * angle_fraction + self.PATH_WIDTH_SMALL
+            # print start_path_width, "START PATH WIDTH"
+
+            step = np.linalg.norm([dx, dy])
+            if not self.nodeless_obstacle_free(self.path[i-1], self.path[i], theta_new, start_path_width, step):
+                print "Old Path No Longer Good"
+                return False
+        print "Old Path Fine"
+        return True
+
     def find_path_rrtstar(self):
-        self.mutex.acquire()
+        # self.mutex.acquire()
         if self.goal is None:
             print "No Goal"
-            self.mutex.release()
+            # self.mutex.release()
             return
         print "Planning New Path"
         # plt.clf()
@@ -213,7 +276,7 @@ class RRTStar:
                         # last_idx = self.get_last_idx()
                         last_idx = -1
                         if last_idx is None:
-                            self.mutex.release()
+                            # self.mutex.release()
                             return
                         # path = self.get_path(last_idx)
                         # self.path = pd.unique(np.array(path))
@@ -221,7 +284,7 @@ class RRTStar:
                         print self.path, "path"
                         self.new_path.publish(self.to_poly(self.path))
                         self.visualize()
-                        self.mutex.release()
+                        # self.mutex.release()
                         return
 
                         # for point in self.path:
@@ -242,7 +305,7 @@ class RRTStar:
         print "NO PATH FOUND IN", self.MAX_RRT_ITERS, "ITERATIONS"
         self.new_path.publish(self.to_poly(self.path))
         # self.no_path.publish(True)
-        self.mutex.release()
+        # self.mutex.release()
 
     def nearest_node(self, random_point):
         """ Finds the index of the nearest node in self.nodes to random_point """

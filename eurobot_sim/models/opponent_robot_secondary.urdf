@@ -1,0 +1,20 @@
+<?xml version="1.0"?>
+<robot name="opponent_robot_secondary">
+  <material name="orange">
+    <color rgba="1 1 0 .5"/>
+  </material>
+
+  <link name="opponent_robot_secondary">
+
+    <visual>
+      <origin xyz="0.0 0.0 .1" rpy="0 0 0" />
+      <geometry>
+        <cylinder length="0.2" radius="0.1" />
+        <!--<box size="0.3 0.3 0.35" />-->
+      </geometry>
+      <material name="orange"/>
+    </visual>
+
+  </link>
+
+</robot>
