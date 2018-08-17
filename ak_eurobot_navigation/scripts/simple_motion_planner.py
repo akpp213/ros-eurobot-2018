@@ -203,6 +203,7 @@ class SimpleMotionPlanner:
         coords.x = self.coords[0]
         coords.y = self.coords[1]
         coords.z = self.coords[2]
+        # self.pub_current_coords.publish(coords)
         rospy.loginfo("===============================================================================================")
         rospy.loginfo("NEW CMD:\t" + str(data.data))
 
@@ -217,9 +218,24 @@ class SimpleMotionPlanner:
             goal = args[:3]
             goal[2] %= (2 * np.pi)
             if len(cmd_args) >= 6:
-                self.set_goal(goal, cmd_id, cmd_type)
+                active_rangefinder_zones = np.array(cmd_args[3:7]).astype('float')
+                self.set_goal(goal, cmd_id, cmd_type, active_rangefinder_zones)
             else:
                 self.set_goal(goal, cmd_id, cmd_type)
+
+        elif cmd_type == "move_odometry":  # simple movement by odometry
+            inp = np.array(cmd_args).astype('float')
+            inp[2] %= 2 * np.pi
+            self.move_odometry(cmd_id, *inp)
+
+        elif cmd_type == "translate_odometry":  # simple liner movement by odometry
+            inp = np.array(cmd_args).astype('float')
+            self.translate_odometry(cmd_id, *inp)
+
+        elif cmd_type == "rotate_odometry":  # simple rotation by odometry
+            inp = np.array(cmd_args).astype('float')
+            inp[0] %= 2 * np.pi
+            self.rotate_odometry(cmd_id, *inp)
 
         elif cmd_type == "stop":
             self.cmd_id = cmd_id
@@ -227,6 +243,38 @@ class SimpleMotionPlanner:
             self.terminate_following()
 
         self.mutex.release()
+
+    def move_odometry(self, cmd_id, goal_x, goal_y, goal_a, vel=0.3, w=1.5):
+        goal = np.array([goal_x, goal_y, goal_a])
+        rospy.loginfo("-------NEW ODOMETRY MOVEMENT-------")
+        rospy.loginfo("Goal:\t" + str(goal))
+        while not self.update_coords():
+            rospy.sleep(0.05)
+
+        d_map_frame = self.distance(self.coords, goal)
+        rospy.loginfo("Distance in map frame:\t" + str(d_map_frame))
+        d_robot_frame = self.rotation_transform(d_map_frame, -self.coords[2])
+        rospy.loginfo("Distance in robot frame:\t" + str(d_robot_frame))
+        d = np.linalg.norm(d_robot_frame[:2])
+        rospy.loginfo("Distance:\t" + str(d))
+
+        beta = np.arctan2(d_robot_frame[1], d_robot_frame[0])
+        rospy.loginfo("beta:\t" + str(beta))
+        da = d_robot_frame[2]
+        dx = d * np.cos(beta - da / 2)
+        dy = d * np.sin(beta - da / 2)
+        d_cmd = np.array([dx, dy, da])
+        if da != 0:
+            d_cmd[:2] *= da / (2 * np.sin(da / 2))
+        rospy.loginfo("d_cmd:\t" + str(d_cmd))
+
+        v_cmd = np.abs(d_cmd) / np.linalg.norm(d_cmd[:2]) * vel
+        if abs(v_cmd[2]) > w:
+            v_cmd *= w / abs(v_cmd[2])
+        rospy.loginfo("v_cmd:\t" + str(v_cmd))
+        cmd = cmd_id + " 162 " + str(d_cmd[0]) + " " + str(d_cmd[1]) + " " + str(d_cmd[2]) + " " + str(v_cmd[0]) + " " + str(v_cmd[1]) + " " + str(v_cmd[2])
+        rospy.loginfo("Sending cmd: " + cmd)
+        self.pub_cmd.publish(cmd)
 
     def update_coords(self):
         try:

@@ -293,10 +293,10 @@ class MotionPlanner:
                 vel = self.follow_path()
                 vel[0] *= goal_d*3
                 vel[1] *= goal_d*3
-                if self.path[1, 2] == 0:
-                    vel[2] = -self.W_MAX * self.find_rot(np.arctan2(vel[1], vel[0])) * 3
-                else:
-                    vel[2] *= goal_d*3
+                # if self.path[1, 2] == 0:
+                vel[2] = -self.W_MAX * self.find_rot(np.arctan2(vel[1], vel[0])) * 3
+                # else:
+                #     vel[2] *= goal_d*3
                 # vel[2] = self.W_MAX * goal_distance[2] / goal_d
                 if np.linalg.norm(vel[:2]) < self.V_MAX/2:
                 # if abs(vel[0]) < .05 and abs(vel[1] < .05):
@@ -427,6 +427,7 @@ class MotionPlanner:
             self.avoid_direc = None
 
     def rrt_found(self, msg):
+        self.mutex.acquire()
         pnts = self.poly_to_list(msg.points)
         if not len(pnts):
             self.path = None
@@ -434,8 +435,10 @@ class MotionPlanner:
             self.path_found = True
             # self.path = np.array(pd.unique(pnts).tolist())
             self.path = pnts
+        self.mutex.release()
 
     def prm_path_found(self, msg):
+        self.mutex.acquire()
         print "prm path found"
         pnts = self.poly_to_list(msg.points)
         if not len(pnts):
@@ -444,6 +447,7 @@ class MotionPlanner:
             self.path_found = True
             # self.path = np.array(pd.unique(pnts).tolist())
             self.path = pnts
+        self.mutex.release()
 
     def update_path(self):
         self.disable_circle = True

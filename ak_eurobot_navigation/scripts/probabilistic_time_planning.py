@@ -23,7 +23,7 @@ class ProbabilisticTimePlanner:
         rospy.init_node("probabilistic_time_planning", anonymous=True)
         self.robot_name = rospy.get_param("robot_name", "main_robot")
         self.V_MAX = rospy.get_param("/" + self.robot_name + "/motion_planner/V_MAX", .25)
-        self.REPLAN_TOLERANCE = rospy.get_param("~REPLAN_TOLERANCE", .25)
+        self.REPLAN_TOLERANCE = rospy.get_param("~REPLAN_TOLERANCE", .5)
         self.MAP_SCALEDOWN = rospy.get_param("~MAP_SCALEDOWN", 8)
 
         self.teammate_name = "secondary_robot" if self.robot_name == "main_robot" else "main_robot"
@@ -59,6 +59,8 @@ class ProbabilisticTimePlanner:
         self.opponent_map = None
         self.opp_map_small = None
 
+        self.path_info = []
+
         self.mutex = Lock()
 
         self.listener = tf.TransformListener()
@@ -69,6 +71,8 @@ class ProbabilisticTimePlanner:
             self.fig = plt.figure()
             self.img = []
             rospy.on_shutdown(self.show_animation)
+        else:
+            rospy.on_shutdown(self.record_path_info)
 
         self.viz_pub = rospy.Publisher("/probabilistic_time_planning/visualization_msgs/Marker", Marker, queue_size=1)
         self.path_pub = rospy.Publisher("new_probability_path", Polygon, queue_size=1)
@@ -77,7 +81,7 @@ class ProbabilisticTimePlanner:
         rospy.Subscriber("/motion_prediction", numpy_msg(OccupancyGrid3D), self.update_probability_map, queue_size=3)
         rospy.Subscriber("/" + self.teammate_name + "/new_probability_path", Polygon, self.add_teammate_path, queue_size=3)
         print "Finished init"
-        rospy.Timer(rospy.Duration(2.5), self.find_path)
+        rospy.Timer(rospy.Duration(1.5), self.find_path)
 
     def update_goal(self, msg):
         if msg.x == -1 and msg.y == -1 and msg.z == -1:
@@ -183,7 +187,7 @@ class ProbabilisticTimePlanner:
         sigma *= (1 + .25*time_step/total_steps)
         sigma_x = sigma * size[0]
         sigma_y = sigma * size[1]
-        const = 35000.0/(sigma * sigma * 2 * np.pi)
+        const = 50000.0/(sigma * sigma * 2 * np.pi)
         x_diff = (self.x - c_x) * np.cos(coords[2]) + (self.y - c_y) * np.sin(coords[2])
         y_diff = (self.y - c_y) * np.cos(coords[2]) - (self.x - c_x) * np.sin(coords[2])
         exp = np.exp(-np.power(x_diff, 2) / (2.0 * sigma_x) ** 2 -
@@ -289,7 +293,9 @@ class ProbabilisticTimePlanner:
     def find_path(self, _):
         self.mutex.acquire()
         if self.goal is not None and self.A is not None and \
-                np.linalg.norm(self.coords-self.goal) > self.REPLAN_TOLERANCE:
+                np.linalg.norm(self.coords[:2]-self.goal[:2]) > self.REPLAN_TOLERANCE:
+            euclidean_dist = np.linalg.norm(self.coords[:2]-self.goal[:2])
+            print euclidean_dist, "dist from goal"
             print "=================================================================="
             print "Finding start and goal on map"
             s, sd = self.find_start_ind()
@@ -300,7 +306,10 @@ class ProbabilisticTimePlanner:
                 start = time.clock()
                 d, parents, dists = self.dijkstra(s, g, sd)
                 # print np.sort(dists).tolist(), "Distance from start for each node"
-                print "took", time.clock()-start, "seconds to find path"
+                total_time = time.clock()-start
+                total_dist = dists[g] + gd
+                self.path_info.append([euclidean_dist, total_dist, total_time])
+                print "took", total_time, "seconds to find path"
                 prob_collision = d[g]
                 print prob_collision, "total weight"
                 self.path = self.get_path(s, g, parents, dists)
@@ -397,8 +406,8 @@ class ProbabilisticTimePlanner:
         move_weight = (np.linalg.norm(diff * self.resolution) + np.linalg.norm(dist_from_goal))
         dist = np.linalg.norm(diff[:2] * self.resolution)
         if self.prob_map_small is None or not self.opponent_map_initialized:
-            print "ignoring collisions"
-            return move_weight, dist
+            # print "ignoring collisions"
+            return dist, dist
 
         th_start = min(self.prob_map_small.shape[0] - 1, int(np.round(prior_dist*.5 / self.V_MAX)))
         th_end = min(self.prob_map_small.shape[0] - 1, int(np.round((prior_dist + dist)*.5 / self.V_MAX)))
@@ -603,6 +612,21 @@ class ProbabilisticTimePlanner:
         ani = animation.ArtistAnimation(self.fig, self.img, interval=200, blit=False, repeat_delay=0)
         # ani.save("updatingMap.mp4")
         plt.show()
+
+    def record_path_info(self):
+        if len(self.path_info):
+            f = open("path_info.txt", "a")
+            info = np.array(self.path_info)
+            print info.tolist()
+            f.write("Euclidean Distances:\n")
+            f.write(str(info[:, 0]))
+            f.write("\nTotal Distances:\n")
+            f.write(str(info[:, 1]))
+            f.write("\nCalculation Times:\n")
+            f.write(str(info[:, 2]))
+            f.close()
+            for i in range(10000):
+                continue
 
 
 if __name__ == "__main__":

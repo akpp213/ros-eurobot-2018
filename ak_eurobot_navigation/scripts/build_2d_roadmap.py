@@ -23,11 +23,11 @@ class BuildRoadmap:
 
         self.MAX_ITERS = rospy.get_param("~MAX_ITERS", 1000)
         self.NEW_CENTER_RATE = rospy.get_param("~NEW_CENTER_RATE", 15)
-        self.ROBOT_NAME = rospy.get_param("~ROBOT_NAME", "secondary_robot")
+        self.ROBOT_NAME = rospy.get_param("robot_name")
         self.SIZE = np.array([rospy.get_param("/" + self.ROBOT_NAME + "/dim_x"),
                               rospy.get_param("/" + self.ROBOT_NAME + "/dim_y")]) / 1000.0
         self.ANGLE_RESOLUTION = rospy.get_param("~ANGLE_RESOLUTION", 0.2)
-        self.GRID_RESOLUTION = rospy.get_param("~GRID_RESOLUTION", 0.1)
+        self.GRID_RESOLUTION = rospy.get_param("~GRID_RESOLUTION", 0.15)
         self.HEAP_CENTERS = np.array(rospy.get_param("/field/cubes")) / 1000.0
         self.TOWER_CENTERS = np.array(rospy.get_param("/field/towers")) / 1000.0
         self.CUBE_SIZE = rospy.get_param("~CUBE_SIZE", 58) / 1000.0
@@ -121,11 +121,11 @@ class BuildRoadmap:
     def add_angle_dimension(self):
         self.configuration_space = np.repeat(self.permissible_region[np.newaxis, :, :],
                                              int(np.pi / self.ANGLE_RESOLUTION), axis=0)
-        self.configuration_space = [self.permissible_region]
+        # self.configuration_space = [self.permissible_region]
 
     def make_configuration_space(self):
-        # self.angles = np.linspace(-np.pi/2, np.pi/2, self.configuration_space.shape[0], endpoint=False)
-        self.angles = [0]
+        self.angles = np.linspace(-np.pi/2, np.pi/2, self.configuration_space.shape[0], endpoint=False)
+        # self.angles = [0]
         # self.angles = [-1.05]
         # X = np.arange(self.shape_map[0])
         # Y = np.arange(self.shape_map[1])
@@ -141,18 +141,18 @@ class BuildRoadmap:
             # opponent_area_mask = self.add_opponent_area(self.SIZE, angle)
             self.configuration_space[i] &= tower_wall_ellipse_mask & treatment_plant_mask
 
-            if self.visualize:
-                edgex = ~self.configuration_space[i] ^ np.roll(self.configuration_space[i], shift=-1, axis=0)
-                edgey = ~self.configuration_space[i] ^ np.roll(self.configuration_space[i], shift=-1, axis=1)
-
-                y, x = np.ma.nonzero(~edgex)
-                y2, x2 = np.ma.nonzero(~edgey)
-                z = np.ones_like(y) * i
-                z2 = np.ones_like(y2) * i
-
-                X = np.concatenate((X, x, x2))
-                Y = np.concatenate((Y, y, y2))
-                Z = np.concatenate((Z, z, z2))
+            # if self.visualize:
+            #     edgex = ~self.configuration_space[i] ^ np.roll(self.configuration_space[i], shift=-1, axis=0)
+            #     edgey = ~self.configuration_space[i] ^ np.roll(self.configuration_space[i], shift=-1, axis=1)
+            #
+            #     y, x = np.ma.nonzero(~edgex)
+            #     y2, x2 = np.ma.nonzero(~edgey)
+            #     z = np.ones_like(y) * i
+            #     z2 = np.ones_like(y2) * i
+            #
+            #     X = np.concatenate((X, x, x2))
+            #     Y = np.concatenate((Y, y, y2))
+            #     Z = np.concatenate((Z, z, z2))
 
             # plt.imshow(~self.configuration_space[i] & self.permissible_region, origin="lower")
             # plt.show()
@@ -163,9 +163,12 @@ class BuildRoadmap:
             # sub = plt.subplot(rows, cols, i + 1)
             # self.subplots.append(sub)
             # plt.imshow(self.configuration_space[i])
-        # combined = np.ones(self.configuration_space.shape[1:], dtype=bool)
-        # for i in xrange(len(self.angles)):
-        #     combined &= self.configuration_space[i]
+        combined = self.configuration_space[0].copy()
+        for i in xrange(len(self.angles)):
+            # plt.imshow(self.configuration_space[i])
+            # plt.show()
+            combined &= self.configuration_space[i]
+        self.configuration_space = [combined]
         # plt.imshow(combined)
         # plt.show()
 
@@ -176,6 +179,7 @@ class BuildRoadmap:
             # plt.show()
 
         # plt.pause(0.001)
+        self.angles = [0]
 
     def add_ellipses(self, size, coords):
         ellipse = np.full(self.permissible_region.shape, True, dtype='bool')
@@ -383,7 +387,7 @@ class BuildRoadmap:
 
         def clip(val, which_delta):
             if which_delta == 2:
-                return val % 1#self.configuration_space.shape[0]
+                return val # % 1#self.configuration_space.shape[0]
             return min(np.ceil(val), self.shape_map[which_delta] - 1)
 
         # self.subplots[int(self.closest_angle(start[2]))].plot((start[0] - self.x0) / self.resolution,
@@ -456,6 +460,7 @@ class BuildRoadmap:
         f.write(str(self.nodes[:self.node_ind].tolist()))
         f.write("\nEdges:\n")
         f.write(str(self.edges_list[:self.node_ind]))
+        f.close()
 
     def convert_nodes_to_points(self):
         self.points = [None] * self.nodes.shape[0]

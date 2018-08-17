@@ -29,12 +29,14 @@ class PredictOpponentMotion:
         # self.MULT = rospy.get_param("/predict_opponent_motion/MULT")
         self.SENSITIVITY = rospy.get_param("/predict_opponent_motion/SENSITIVITY", 0.95)
         self.SPECIFICITY = rospy.get_param("/predict_opponent_motion/SPECIFICITY", 0.7)
-        self.UPDATE_RATE = rospy.get_param("~RATE", 40)
+        self.UPDATE_RATE = rospy.get_param("~RATE", 30)
         self.TOWERS = np.array(rospy.get_param("/field/towers")) / 1000.0
         self.CUBES = np.array(rospy.get_param("/field/cubes")) / 1000.0
         self.SWITCHES = np.array([rospy.get_param("/field/switches_x"), [150.0, 150.0]]).T / 1000.0
         self.POI = np.concatenate((self.TOWERS[:, :2], self.CUBES, self.SWITCHES), axis=0)
         self.NUM_PLACES = max(2, rospy.get_param("~NUM_PLACES", 3))
+        self.MAX_OPPONENT_SPEED = rospy.get_param("~MAX_OPPONENT_SPEED", 0.35)
+        self.MIN_OPPONENT_SPEED = rospy.get_param("~MIN_OPPONENT_SPEED", 0.02)
 
         self.x0 = None
         self.y0 = None
@@ -51,6 +53,7 @@ class PredictOpponentMotion:
         self.map_updated = False
 
         self.last_centers = None
+        self.old_centers = None
         self.i = 0
         self.j = 0
         self.start_time = None
@@ -61,7 +64,18 @@ class PredictOpponentMotion:
 
         self.x, self.y = None, None
 
+        self.position_estimates = []
+        self.actual_positions = []
+        self.velocity_estimates = []
+        self.actual_velocities = []
+
+        self.predicted_locs = []
+        self.actual_locs = []
+        self.check_times = np.array([])
+
         self.loop_time = 0
+
+        self.beginning = time.time()
 
         self.animate = False
         self.animate_predicted_motion = False
@@ -70,13 +84,15 @@ class PredictOpponentMotion:
             self.img = []
             rospy.on_shutdown(self.show_animation)
 
-        if self.animate_predicted_motion:
+        elif self.animate_predicted_motion:
             self.fig = plt.figure()
             # self.ax = plt.axes(projection='3d')
             # self.ax.set_zlim(bottom=0, top=100)
             # self.ax.view_init(5, -135)
             self.img = []
             rospy.on_shutdown(self.show_animation)
+        # else:
+        #     rospy.on_shutdown(self.record_info)
 
         self.listener = tf.TransformListener()
 
@@ -123,14 +139,28 @@ class PredictOpponentMotion:
                 return
             centers = robot_centers[~((np.linalg.norm(robot_centers[:, :2]-main[:2], axis=1) <= 0.3) |
                                     (np.linalg.norm(robot_centers[:, :2]-secondary[:2], axis=1) <= 0.3))]
-
+            # opp_loc = self.get_robot_loc("opponent_robot")
+            # if opp_loc is not None and len(centers) > 0:
+            #     self.actual_positions.append(opp_loc[:2].tolist())
+            #     closest = np.argmin(np.linalg.norm(centers[:, :2] - opp_loc[:2], axis=1))
+            #     if np.linalg.norm(centers[closest, :2] - opp_loc[:2]) <= 0.3:
+            #         self.position_estimates.append(centers[closest, :2].tolist())
+            #     else:
+            #         self.position_estimates.append([-1, -1])
             # mask = np.full(self.permissible_region.shape, 0)
             # z = np.full(self.permissible_region.shape, 0)
             # print len(centers), "NUM CENTERS"
             # prev = 0
+            yo = time.time()-self.beginning
+            opp_loc = self.get_robot_loc("opponent_robot")
+            if opp_loc is not None:
+                opp_loc[2] = yo
+                self.actual_locs.append(opp_loc)
+            # print yo
             if self.i == 0:
                 now = time.time()
                 if self.start_time:
+                    last_time_diff = self.time_diff
                     self.time_diff = now - self.start_time
                 self.start_time = now
 
@@ -145,15 +175,25 @@ class PredictOpponentMotion:
                 # if self.i == 0:
                     if self.last_centers is None:
                         self.last_centers = np.array([center])
+                        self.old_centers = np.array([center])
                     else:
                         min_loc = np.argmin(np.linalg.norm(self.last_centers[:, :2] - center[:2], axis=1))
-                        displacement = self.last_centers[min_loc, :2] - center[:2]
-                        if np.linalg.norm(displacement) <= 0.3:
+                        displacement = center[:2] - self.last_centers[min_loc, :2]
+                        max_disp = 0.3 if not self.time_diff else self.MAX_OPPONENT_SPEED * self.time_diff
+                        if np.linalg.norm(displacement) <= max_disp:
                             vel = None
                             if self.time_diff:
-                                vel = displacement/self.time_diff#-self.loop_time/2)
-                                velocities.append(np.linalg.norm(vel))
+                                vel = displacement/self.time_diff
+                                weighted_vel = vel
                                 # print vel, displacement, self.time_diff
+                                if last_time_diff:
+                                    last_vel = (self.last_centers[min_loc, :2] - self.old_centers[min_loc, :2]) /\
+                                               last_time_diff
+                                    weighted_vel = last_vel/3.0 + 2*vel/3.0
+                                if np.linalg.norm(weighted_vel) < self.MIN_OPPONENT_SPEED:
+                                    weighted_vel = np.zeros(2)
+                                velocities.append(np.linalg.norm(weighted_vel))
+                                self.velocity_estimates.append(weighted_vel.tolist())
                             movement = self.direction_of_motion(center, self.last_centers[min_loc])
                             # Point of interest in direction of movement
                             diffs = np.absolute((self.direction_of_motion(self.POI, center) - movement + np.pi)
@@ -173,6 +213,8 @@ class PredictOpponentMotion:
                             #                          self.paths(size, np.append(mid_point, ang), self.get_prob(k)))
 
                             if vel is not None:
+                                # self.actual_locs.append(opp_loc[:2].tolist())
+                                most_recent_time = time.time()-self.beginning
                                 for t in range(self.TIMES):
                                     # z2 = np.full(self.permissible_region.shape, 0)
                                     for k in range(self.NUM_PLACES):
@@ -181,15 +223,28 @@ class PredictOpponentMotion:
                                             self.vis_movement(self.last_centers[min_loc], center, j)
                                             self.vis_poi(poi_in_dom)
                                         # z2 += self.motion_model(center, vel, t, poi_in_dom, self.get_prob(k)/self.NUM_PLACES)
-                                        self.probability_grid_3d[t] += self.motion_model(center, vel, t, poi_in_dom, self.get_prob(k)/self.NUM_PLACES)
+                                        self.probability_grid_3d[t] += self.motion_model(center, weighted_vel, t, poi_in_dom, self.get_prob(k)/self.NUM_PLACES)
+                                    max_prob_ind = np.unravel_index(np.argmax(self.probability_grid_3d[t], axis=None),
+                                                                    self.probability_grid_3d[t].shape)
+
+                                    pred_loc = np.array(max_prob_ind[::-1]) * self.resolution + np.array([self.x0, self.y0])
+                                    self.predicted_locs.append(pred_loc.tolist())
+                                    self.check_times = np.append(self.check_times, most_recent_time+.5*t)
+                                    ## actual_loc = opp_loc[:2] + opp_vel[:2] * .5 * t
+                                    ## self.actual_locs.append(actual_loc)
+                                    # sub = plt.subplot(3, 5, t+1)
+                                    # sub.imshow(self.probability_grid_3d[t])
                                     if self.animate_predicted_motion:
                                         # self.img.append([self.ax.plot_wireframe(self.x, self.y, self.probability_grid_3d[t])])
                                         # z2[-1, -1] = 100
                                         self.img.append([plt.imshow(self.probability_grid_3d[t])])
+                                # plt.show()
                             # print self.last_centers[min_loc] - center
+                            self.old_centers[min_loc] = self.last_centers[min_loc]
                             self.last_centers[min_loc] = center
                         else:
                             self.last_centers = np.append(self.last_centers, [center], axis=0)
+                            self.old_centers = np.append(self.old_centers, [center], axis=0)
                     self.j = (self.j + 1) % self.TIMES
                     # self.temporal_occupancy_grid[self.j] = self.uniform_prior
                 # mask = np.maximum(mask, self.our_robot_circle(center[2]/2.0, center[:2]))
@@ -305,6 +360,16 @@ class PredictOpponentMotion:
             return None, None
 
         return state_main, state_secondary
+
+    def get_robot_loc(self, name):
+        try:
+            (trans, rot) = self.listener.lookupTransform('/map', '/' + name, rospy.Time(0))
+            yaw = tf.transformations.euler_from_quaternion(rot)[2]
+            state = np.array([trans[0], trans[1], yaw])
+            return state
+        except (tf.LookupException, tf.ConnectivityException, tf.ExtrapolationException):
+            rospy.loginfo("Simulator failed to lookup tf for " + name)
+            return None
 
     @staticmethod
     def map_to_occupancy_grid(pnts):
@@ -520,6 +585,76 @@ class PredictOpponentMotion:
         self.stop = True
         ani = animation.ArtistAnimation(self.fig, self.img, interval=500/self.TIMES, blit=False, repeat_delay=0)
         # ani.save("updatingMap.mp4")
+        plt.show()
+
+    def record_info(self):
+        # print self.position_estimates, "estimated positions"
+        # print self.actual_positions, "actual positions"
+        # print self.velocity_estimates, "estimated velocities"
+        # self.actual_velocities = [[-0.2, 0.1]] * len(self.velocity_estimates)
+        # print self.actual_velocities, "actual velocities"
+        # print self.predicted_locs
+        # print self.actual_locs
+        ax = plt.axes()
+        plt.xlim([-.02, 3.02])
+        plt.ylim([-.02, 2.02])
+        # print self.actual_locs
+        # print self.check_times
+        real = np.array(self.actual_locs)
+        x_errs = [None] * len(self.predicted_locs)
+        y_errs = [None] * len(self.predicted_locs)
+        time_predicts = np.empty((self.TIMES, len(self.predicted_locs)/self.TIMES))
+        print time_predicts.shape, len(self.predicted_locs)
+        # print real[:, 2]
+        for i in xrange(len(self.predicted_locs)):
+            plt.plot(self.predicted_locs[i][0], self.predicted_locs[i][1], "or")
+            # print self.check_times[i]
+            # print np.argmin(np.absolute(real[:, 2]-self.check_times[i]))
+            actual = real[np.argmin(np.absolute(real[:, 2]-self.check_times[i]))]
+            x_errs[i] = abs(self.predicted_locs[i][0] - actual[0])
+            y_errs[i] = abs(self.predicted_locs[i][1] - actual[1])
+            # print 10*(len(self.predicted_locs)//10)
+            if (i//self.TIMES) < time_predicts.shape[1]:
+                # print i
+                time_predicts[i % self.TIMES, i//self.TIMES] = np.linalg.norm([x_errs[i], y_errs[i]])
+            # print actual, "actual loc"
+            plt.plot(actual[0], actual[1], "og")
+            # plt.pause(.0001)
+        # f = open("predictions.txt", 'w')
+        # f.write("Position Estimates:\n")
+        # f.write(str(self.position_estimates))
+        # f.write("\nActual Positions:\n")
+        # f.write(str(self.actual_positions))
+        # f.write("\nVelocity Estimates:\n")
+        # f.write(str(self.velocity_estimates))
+        # f.write("\nActual Velocities:\n")
+        # f.write(str(self.actual_velocities))
+        # f.close()
+        # errors = np.linalg.norm(np.array(self.position_estimates) - np.array(self.actual_positions), axis=1)
+        # pos_errors = np.absolute(np.array(self.predicted_locs) - np.array(self.actual_locs)).T.tolist()
+        # vel_errors = np.absolute(np.array(self.velocity_estimates) - np.array(self.actual_velocities)).T.tolist()
+        # plt.boxplot(pos_errors, labels=["posX Error", "posY Error"])
+        plt.title("Actual Robot Location and Max Predicted Collision Probability")
+        plt.ylabel("Y (m)")
+        plt.xlabel("X (m)")
+        ax.legend(['Location of Highest Collision Probability', 'Actual Robot Location'])
+        plt.show()
+        plt.figure()
+        plt.title("X and Y Predicted Center Error")
+        plt.xlabel("Error Distance (m)")
+        plt.boxplot([x_errs] + [y_errs], labels=["posX Error", "posY Error"])
+        plt.show()
+        plt.figure()
+        plt.title("Overall Error for Future Predictions")
+        plt.xlabel("Time Into the Future (s)")
+        plt.ylabel("Error (m)")
+        # plt.xlim([0,5])
+        plt.boxplot(time_predicts.T, labels=["0.0", "0.5", "1.0", "1.5", "2.0", "2.5", "3.0", "3.5", "4.0", "4.5", "5.0", "5.5", "6.0", "6.5"])
+        # plt.plot([0]*time_predicts.shape[1], time_predicts[0], 'o', [.5]*time_predicts.shape[1], time_predicts[0], 'o',
+        #          [1]*time_predicts.shape[1], time_predicts[0], 'o', [1.5]*time_predicts.shape[1], time_predicts[0], 'o',
+        #          [2]*time_predicts.shape[1], time_predicts[0], 'o', [2.5]*time_predicts.shape[1], time_predicts[0], 'o',
+        #          [3]*time_predicts.shape[1], time_predicts[0], 'o', [3.5]*time_predicts.shape[1], time_predicts[0], 'o',
+        #          [4]*time_predicts.shape[1], time_predicts[0], 'o', [4.5]*time_predicts.shape[1], time_predicts[0], 'o')
         plt.show()
 
 

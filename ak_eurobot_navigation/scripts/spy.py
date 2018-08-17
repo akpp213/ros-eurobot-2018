@@ -192,26 +192,36 @@ class Spy:
         else:
             slope = (pt2[1] - pt1[1]) / (pt2[0] - pt1[0])
             a = np.arctan2(pt2[1] - pt1[1], pt2[0] - pt1[0])
+            dx = np.sin(a) * epsilon
+            dy = np.cos(a) * epsilon
             # print slope, angle
             # plt.plot([pt1[0], pt2[0]], [pt1[1], pt2[1]], 'c')
-            for x_val, y_val in tuple(np.array([x, y]).T):
-                color1 = 'og'
-                if (x_val >= (min(pt1[0], pt2[0]) - epsilon)) & (x_val <= (max(pt1[0], pt2[0]) + epsilon)) & \
-                   (y_val >= (x_val - pt1[0] - epsilon * np.sin(a) * np.sign(slope)) * slope + pt1[1] - epsilon * abs(np.cos(a))) & \
-                   (y_val <= (x_val - pt1[0] + epsilon * np.sin(a) * np.sign(slope)) * slope + pt1[1] + epsilon * abs(np.cos(a))):
-                    color1 = 'or'
-                # plt.plot(x_val - epsilon*np.sin(angle), y_val - epsilon*np.cos(angle), color1)
-                # plt.plot(x_val + epsilon*np.sin(angle), y_val + epsilon*np.cos(angle), color1)
-                # plt.plot(x_val, y_val, color1)
-                # plt.plot(x_val, (x_val - pt1[0] - epsilon * np.sin(angle) * np.sign(slope)) * slope + pt1[1]
-                #          - epsilon * abs(np.cos(angle)), 'ob')
-                # plt.plot(x_val, (x_val - pt1[0] + epsilon * np.sin(angle) * np.sign(slope)) * slope + pt1[1]
-                #          + epsilon * abs(np.cos(angle)), 'oy')
-                # plt.pause(0.001)
-            # plt.show()
+            # bound1 = ((pt1[0] + dx, pt1[1] - dy),
+            #           (pt2[0] + dx, pt2[1] - dy))
+            # bound2 = ((pt1[0] - dx, pt1[1] + dy),
+            #           (pt2[0] - dx, pt2[1] + dy))
+            # plt.plot([bound1[0][0], bound1[1][0]], [bound1[0][1], bound1[1][1]], 'b')
+            # plt.plot([bound2[0][0], bound2[1][0]], [bound2[0][1], bound2[1][1]], 'y')
+            # for x_val, y_val in tuple(np.array([x, y]).T):
+            #     color1 = 'og'
+            #     if (x_val >= (min(pt1[0], pt2[0]) - epsilon)) & (x_val <= (max(pt1[0], pt2[0]) + epsilon)) & \
+            #        (y_val >= (x_val - pt1[0] - epsilon * np.sin(a) * np.sign(slope)) * slope + pt1[1] - epsilon * abs(np.cos(a))) & \
+            #        (y_val <= (x_val - pt1[0] + epsilon * np.sin(a) * np.sign(slope)) * slope + pt1[1] + epsilon * abs(np.cos(a))):
+            #         color1 = 'or'
+            #     # plt.plot(x_val + epsilon*np.sin(a), y_val - epsilon*np.cos(a), color1)
+            #     # plt.plot(x_val - epsilon*np.sin(a), y_val + epsilon*np.cos(a), color1)
+            # #     plt.plot(x_val, y_val, color1)
+            # #     plt.plot(x_val, (x_val - pt1[0] - epsilon * np.sin(a)) * slope + pt1[1]
+            # #              - epsilon * np.cos(a), 'ob')
+            # #     plt.plot(x_val, (x_val - pt1[0] + epsilon * np.sin(a)) * slope + pt1[1]
+            # #              + epsilon * np.cos(a), 'oy')
+            # #     plt.pause(0.001)
+            # # plt.show()
+            if abs(a) < np.pi/2:
+                return (x >= (min(pt1[0], pt2[0]) - epsilon)) & (x <= (max(pt1[0], pt2[0]) + epsilon)) & \
+                       (y >= (x - pt1[0] - dx) * slope + pt1[1] - dy) & (y <= (x - pt1[0] + dx) * slope + pt1[1] + dy)
             return (x >= (min(pt1[0], pt2[0]) - epsilon)) & (x <= (max(pt1[0], pt2[0]) + epsilon)) & \
-                   (y >= (x - pt1[0] - epsilon * np.sin(a) * np.sign(slope)) * slope + pt1[1] - epsilon * abs(np.cos(a))) & \
-                   (y <= (x - pt1[0] + epsilon * np.sin(a) * np.sign(slope)) * slope + pt1[1] + epsilon * abs(np.cos(a)))
+                   (y <= (x - pt1[0] - dx) * slope + pt1[1] - dy) & (y >= (x - pt1[0] + dx) * slope + pt1[1] + dy)
 
     def get_robot_loc(self, name):
         try:

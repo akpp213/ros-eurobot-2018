@@ -4,7 +4,8 @@
   <node name="probabilistic_time_planning" pkg="ak_eurobot_navigation" type="probabilistic_time_planning.py" respawn="true" output="screen">
   </node>
 
-  <node name="build_roadmap" pkg="ak_eurobot_navigation" type="build_roadmap.py" respawn="false" output="screen">
+  <!--<node name="build_roadmap" pkg="ak_eurobot_navigation" type="build_roadmap.py" respawn="false" output="screen">-->
+  <node name="build_2d_roadmap" pkg="ak_eurobot_navigation" type="build_2d_roadmap.py" respawn="false" output="screen">
   </node>
 
 </launch>

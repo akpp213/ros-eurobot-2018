@@ -23,7 +23,7 @@ class BuildRoadmap:
 
         self.MAX_ITERS = rospy.get_param("~MAX_ITERS", 1000)
         self.NEW_CENTER_RATE = rospy.get_param("~NEW_CENTER_RATE", 15)
-        self.ROBOT_NAME = rospy.get_param("~ROBOT_NAME", "main_robot")
+        self.ROBOT_NAME = rospy.get_param("robot_name")
         self.SIZE = np.array([rospy.get_param("/" + self.ROBOT_NAME + "/dim_x"),
                               rospy.get_param("/" + self.ROBOT_NAME + "/dim_y")]) / 1000.0
         self.ANGLE_RESOLUTION = rospy.get_param("~ANGLE_RESOLUTION", 0.5)
@@ -128,9 +128,10 @@ class BuildRoadmap:
         # X = np.arange(self.shape_map[0])
         # Y = np.arange(self.shape_map[1])
         # X,Y = np.meshgrid(X,Y)
-        X = np.array([])
-        Y = np.array([])
-        Z = np.array([])
+        if self.visualize:
+            X = np.array([])
+            Y = np.array([])
+            Z = np.array([])
 
         for i, angle in enumerate(self.angles):
             coords = (self.HEAP_CENTERS - np.array([self.x0, self.y0])) / self.resolution
@@ -170,7 +171,7 @@ class BuildRoadmap:
         # 3D Scatter Plot
         if self.visualize:
             self.ax.scatter3D(X, Y, Z, c=Z)
-            self.ax.view_init(75, -90)
+            self.ax.view_init(90, -90)
             # plt.show()
 
         # plt.pause(0.001)
@@ -451,6 +452,7 @@ class BuildRoadmap:
         f.write(str(self.nodes[:self.node_ind].tolist()))
         f.write("\nEdges:\n")
         f.write(str(self.edges_list[:self.node_ind]))
+        f.close()
 
     def convert_nodes_to_points(self):
         self.points = [None] * self.nodes.shape[0]

@@ -4,7 +4,7 @@ RATE: 25
 XY_GOAL_TOLERANCE: 0.04
 YAW_GOAL_TOLERANCE: 0.15
 # maximum speed
-V_MAX: 0.25 #0.35
+V_MAX: 0.1 #0.35
 W_MAX: 1.5
 # acceleration at beginning of movements
 ACCELERATION: 1.0
